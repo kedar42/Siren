@@ -72,7 +72,7 @@ class FakePlayer:
 
     async def skip(self) -> None:
         self.skip_calls += 1
-        self.current = None
+        self.current = self.queue.popleft() if self.queue else None
 
     async def stop(self) -> None:
         self.stop_calls += 1
@@ -202,6 +202,7 @@ class PlaybackControlsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(player.skip_calls, 1)
         self.assertEqual(interaction.response.messages, [])
+        self.assertIn("**Now playing:** Other — Next", interaction.message.edits[0]["content"])
         self.assertNotIn("Current", interaction.message.edits[0]["content"])
 
     async def test_stop_calls_player_stop(self) -> None:

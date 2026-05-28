@@ -190,7 +190,7 @@ class GuildPlayerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(player.current_elapsed_ms())
         self.assertEqual(player.current_remaining_ms(), 0)
 
-    async def test_skip_clears_current_before_after_callback_advances(self) -> None:
+    async def test_skip_starts_next_queued_track_before_returning(self) -> None:
         clock = FakeClock()
         voice = StatefulVoice()
         player = GuildPlayer(FakeBot(), 123, ImmediateYouTube(), settings(), clock=clock)
@@ -207,11 +207,38 @@ class GuildPlayerTests(unittest.IsolatedAsyncioTestCase):
             clock.advance(5)
             await player.skip()
 
-        self.assertIsNone(player.current)
-        self.assertIsNone(player.current_elapsed_ms())
-        self.assertEqual(player.current_remaining_ms(), 0)
+        self.assertEqual(player.current.title, "Second")
+        self.assertEqual(player.current_elapsed_ms(), 0)
         self.assertEqual(voice.stop_calls, 1)
-        self.assertEqual([track.title for track in player.queue], ["Second"])
+        self.assertEqual(voice.play_calls, 2)
+        self.assertEqual(list(player.queue), [])
+
+    async def test_skipped_track_after_callback_is_stale_after_skip_owned_transition(self) -> None:
+        bot = FakeBot()
+        bot.loop = asyncio.get_running_loop()
+        voice = StatefulVoice()
+        player = GuildPlayer(bot, 123, ImmediateYouTube(), settings())
+        player.voice = voice
+
+        with patch("siren.player.discord.FFmpegOpusAudio.from_probe", return_value=object()):
+            player.queue.extend(
+                [
+                    Track("First", "Artist", 1000, "first-url"),
+                    Track("Second", "Artist", 1000, "second-url"),
+                ]
+            )
+            await player.play_next()
+            first_after = voice.after_callbacks[0]
+
+            await player.skip()
+            self.assertEqual(player.current.title, "Second")
+            self.assertEqual(voice.play_calls, 2)
+
+            first_after(None)
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(player.current.title, "Second")
+        self.assertEqual(voice.play_calls, 2)
 
     async def test_stale_after_callback_does_not_clear_new_playback(self) -> None:
         bot = FakeBot()

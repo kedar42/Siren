@@ -297,11 +297,14 @@ class GuildPlayer:
             self.reconcile_idle()
 
     async def skip(self) -> None:
-        if self.voice and (self.voice.is_playing() or self.voice.is_paused()):
-            log.info("[player %s] skip requested", self.tag)
-            self.current = None
-            self._clear_timing()
-            self.voice.stop()
+        async with self._transition_lock:
+            if self.voice and (self.voice.is_playing() or self.voice.is_paused()):
+                log.info("[player %s] skip requested", self.tag)
+                self._playback_generation += 1
+                self.current = None
+                self._clear_timing()
+                self.voice.stop()
+                await self._play_next_unlocked()
 
     async def stop(self) -> None:
         async with self._transition_lock:

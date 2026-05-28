@@ -27,13 +27,21 @@ class PlaybackControlsView(discord.ui.View):
 
     async def _edit_message(self, interaction: discord.Interaction, content: str) -> None:
         response = interaction.response
-        if hasattr(response, "edit_message"):
+        if not response.is_done() and hasattr(response, "edit_message"):
             await response.edit_message(content=content, view=self)
             return
         message = getattr(interaction, "message", None)
         if message is not None:
             self.message = message
             await message.edit(content=content, view=self)
+            return
+        if hasattr(interaction, "edit_original_response"):
+            await interaction.edit_original_response(content=content, view=self)
+
+    async def _defer_if_needed(self, interaction: discord.Interaction) -> None:
+        response = interaction.response
+        if not response.is_done() and hasattr(response, "defer"):
+            await response.defer()
 
     def _disable_buttons(self) -> None:
         for item in self.children:
@@ -81,6 +89,7 @@ class PlaybackControlsView(discord.ui.View):
         ):
             await self._send_error(interaction, "Nothing playing.")
             return
+        await self._defer_if_needed(interaction)
         await player.skip()
         await self._edit_message(interaction, self._current_content(player))
 
@@ -89,6 +98,7 @@ class PlaybackControlsView(discord.ui.View):
         if player is None or player.voice is None or not player.voice.is_connected():
             await self._send_error(interaction, "Not connected.")
             return
+        await self._defer_if_needed(interaction)
         await player.stop()
         self._disable_buttons()
         await self._edit_message(interaction, self._current_content(player))

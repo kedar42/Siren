@@ -1,0 +1,171 @@
+import asyncio
+import time
+import unittest
+
+from siren.models import Track
+from siren.resolver import TrackResolver, score_candidate
+from siren.spotify import SpotifyUrlKind, UnsupportedSpotifyUrl
+
+
+class FakeSpotify:
+    def __init__(self, anchor: Track | None = None, unsupported: SpotifyUrlKind | None = None) -> None:
+        self.anchor = anchor
+        self.unsupported = unsupported
+
+    def track_from_url(self, url: str) -> Track | None:
+        if self.unsupported:
+            raise UnsupportedSpotifyUrl(self.unsupported)
+        return self.anchor
+
+    def search_track(self, query: str) -> Track | None:
+        return self.anchor
+
+    @staticmethod
+    def parse_url(query: str):
+        from siren.spotify import SpotifyService
+
+        return SpotifyService.parse_url(query)
+
+
+class SlowSpotify(FakeSpotify):
+    def __init__(self, anchor: Track | None = None, *, delay_seconds: float = 0.2) -> None:
+        super().__init__(anchor=anchor)
+        self.delay_seconds = delay_seconds
+
+    def track_from_url(self, url: str) -> Track | None:
+        time.sleep(self.delay_seconds)
+        return super().track_from_url(url)
+
+    def search_track(self, query: str) -> Track | None:
+        time.sleep(self.delay_seconds)
+        return super().search_track(query)
+
+
+class FakeYouTube:
+    def __init__(self, candidates: list[Track]) -> None:
+        self.candidates = candidates
+        self.searches: list[str] = []
+
+    async def search(self, query: str, limit: int = 5) -> list[Track]:
+        self.searches.append(query)
+        return self.candidates
+
+    async def resolve_url(self, url: str):
+        return Track("Resolved", "Uploader", 100000, url), "https://stream.test/audio"
+
+
+ANCHOR = Track("Never Gonna Give You Up", "Rick Astley", 213000, "spotify", "GBARL9300135")
+
+
+class ResolverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unsupported_spotify_album_returns_clear_result(self) -> None:
+        resolver = TrackResolver(FakeSpotify(unsupported=SpotifyUrlKind.ALBUM), FakeYouTube([]))
+        result = await resolver.resolve("https://open.spotify.com/album/abc123")
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.track)
+        self.assertIn("Spotify album URLs", result.message)
+
+    async def test_embedded_unsupported_spotify_album_returns_clear_result(self) -> None:
+        resolver = TrackResolver(FakeSpotify(unsupported=SpotifyUrlKind.ALBUM), FakeYouTube([]))
+        result = await resolver.resolve("please play https://open.spotify.com/album/abc123 thanks")
+        self.assertFalse(result.ok)
+        self.assertIn("Spotify album URLs", result.message)
+
+    async def test_unsupported_spotify_playlist_returns_clear_result(self) -> None:
+        resolver = TrackResolver(FakeSpotify(unsupported=SpotifyUrlKind.PLAYLIST), FakeYouTube([]))
+        result = await resolver.resolve("https://open.spotify.com/playlist/playlist123")
+        self.assertFalse(result.ok)
+        self.assertIn("Spotify playlist URLs", result.message)
+
+    async def test_text_query_uses_spotify_anchor_and_picks_best_candidate(self) -> None:
+        candidates = [
+            Track("Never Gonna Give You Up lyrics", "Someone", 213000, "bad"),
+            Track("Rick Astley - Never Gonna Give You Up", "Rick Astley", 213000, "good"),
+        ]
+        resolver = TrackResolver(FakeSpotify(anchor=ANCHOR), FakeYouTube(candidates))
+        result = await resolver.resolve("never gonna give you up")
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(result.track)
+        assert result.track is not None
+        self.assertEqual(result.track.webpage_url, "good")
+        self.assertEqual(result.track.isrc, "GBARL9300135")
+
+    async def test_text_spotify_lookup_does_not_block_event_loop(self) -> None:
+        first = Track("First", "Uploader", 100000, "first-url")
+        resolver = TrackResolver(SlowSpotify(anchor=None), FakeYouTube([first]))
+
+        start = time.perf_counter()
+        resolve_task = asyncio.create_task(resolver.resolve("plain query"))
+        await asyncio.sleep(0.02)
+
+        self.assertLess(time.perf_counter() - start, 0.1)
+        result = await resolve_task
+        self.assertTrue(result.ok)
+        self.assertEqual(result.track, first)
+
+    async def test_spotify_url_lookup_does_not_block_event_loop(self) -> None:
+        candidates = [Track("Rick Astley - Never Gonna Give You Up", "Rick Astley", 213000, "good")]
+        resolver = TrackResolver(SlowSpotify(anchor=ANCHOR), FakeYouTube(candidates))
+
+        start = time.perf_counter()
+        resolve_task = asyncio.create_task(resolver.resolve("https://open.spotify.com/track/abc123"))
+        await asyncio.sleep(0.02)
+
+        self.assertLess(time.perf_counter() - start, 0.1)
+        result = await resolve_task
+        self.assertTrue(result.ok)
+        self.assertEqual(result.track.webpage_url if result.track else None, "good")
+
+    async def test_plain_youtube_fallback_when_spotify_has_no_anchor(self) -> None:
+        first = Track("First", "Uploader", 100000, "first-url")
+        resolver = TrackResolver(FakeSpotify(anchor=None), FakeYouTube([first]))
+        result = await resolver.resolve("plain query")
+        self.assertTrue(result.ok)
+        self.assertEqual(result.track, first)
+
+    async def test_bare_spotify_like_input_is_not_treated_as_direct_url(self) -> None:
+        candidates = [Track("Rick Astley - Never Gonna Give You Up", "Rick Astley", 213000, "good")]
+        youtube = FakeYouTube(candidates)
+        resolver = TrackResolver(FakeSpotify(anchor=ANCHOR), youtube)
+
+        result = await resolver.resolve("open.spotify.com/track/abc123")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.track.webpage_url if result.track else None, "good")
+        self.assertEqual(youtube.searches, ['"GBARL9300135"', "Rick Astley - Never Gonna Give You Up"])
+
+    async def test_autocomplete_uses_spotify_anchor_for_youtube_candidates(self) -> None:
+        youtube = FakeYouTube([Track("Official", "Artist", 180000, "official-url")])
+        resolver = TrackResolver(FakeSpotify(anchor=ANCHOR), youtube)
+
+        choices = await resolver.autocomplete("never gonna give you up", limit=25)
+
+        self.assertEqual(choices[0].webpage_url, "official-url")
+        self.assertEqual(youtube.searches, ["Rick Astley - Never Gonna Give You Up"])
+
+    async def test_autocomplete_falls_back_to_raw_youtube_search_without_spotify_anchor(self) -> None:
+        youtube = FakeYouTube([Track("Raw", "Uploader", 180000, "raw-url")])
+        resolver = TrackResolver(FakeSpotify(anchor=None), youtube)
+
+        choices = await resolver.autocomplete("raw query", limit=25)
+
+        self.assertEqual(choices[0].webpage_url, "raw-url")
+        self.assertEqual(youtube.searches, ["raw query"])
+
+    async def test_autocomplete_returns_no_candidates_for_empty_or_url_input(self) -> None:
+        youtube = FakeYouTube([Track("Ignored", "Uploader", 180000, "ignored-url")])
+        resolver = TrackResolver(FakeSpotify(anchor=ANCHOR), youtube)
+
+        self.assertEqual(await resolver.autocomplete("", limit=25), [])
+        self.assertEqual(await resolver.autocomplete("   ", limit=25), [])
+        self.assertEqual(await resolver.autocomplete("https://www.youtube.com/watch?v=abc", limit=25), [])
+        self.assertEqual(await resolver.autocomplete("HTTPS://www.youtube.com/watch?v=abc", limit=25), [])
+        self.assertEqual(await resolver.autocomplete("youtube.com/watch?v=abc", limit=25), [])
+        self.assertEqual(await resolver.autocomplete("youtu.be/abc", limit=25), [])
+        self.assertEqual(await resolver.autocomplete("https://open.spotify.com/track/abc", limit=25), [])
+        self.assertEqual(youtube.searches, [])
+
+    def test_score_rejects_large_duration_mismatch(self) -> None:
+        candidate = Track("Song", "Artist", 300000, "url")
+        target = Track("Song", "Artist", 100000, "target")
+        self.assertEqual(score_candidate(candidate, target, has_anchor=True), float("-inf"))

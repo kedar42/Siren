@@ -1,0 +1,9 @@
+discord.py[voice]==2.7.1
+yt-dlp==2026.3.17
+spotipy==2.26.0
+rapidfuzz==3.14.5
+python-dotenv==1.2.2
+# PyNaCl is pulled in transitively by discord.py[voice]. We don't pin it
+# directly: discord.py 2.7.1 caps it at <1.6, so we can't use 1.6.x even
+# though that's the current "latest stable". Bump this comment when discord.py
+# loosens the cap.

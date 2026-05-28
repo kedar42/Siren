@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any
+
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
+
+from .config import Settings
+from .models import Track
+
+log = logging.getLogger("siren")
+
+
+class SpotifyUrlKind(StrEnum):
+    TRACK = "track"
+    ALBUM = "album"
+    PLAYLIST = "playlist"
+
+
+@dataclass(frozen=True)
+class SpotifyUrl:
+    kind: SpotifyUrlKind
+    spotify_id: str
+    url: str
+
+
+class UnsupportedSpotifyUrl(ValueError):
+    def __init__(self, kind: SpotifyUrlKind) -> None:
+        self.kind = kind
+        super().__init__(f"Spotify {kind.value} URLs are not supported yet. Please use a Spotify track URL.")
+
+
+SPOTIFY_URL_RE = re.compile(
+    r"https?://open\.spotify\.com/(?:intl-[a-z]+/)?(track|album|playlist)/([A-Za-z0-9]+)"
+)
+
+
+class SpotifyService:
+    def __init__(self, settings: Settings, client: Any | None = None) -> None:
+        self._client = client if client is not None else spotipy.Spotify(
+            auth_manager=SpotifyClientCredentials(
+                client_id=settings.spotify_client_id,
+                client_secret=settings.spotify_client_secret,
+            )
+        )
+
+    @staticmethod
+    def parse_url(query: str) -> SpotifyUrl | None:
+        match = SPOTIFY_URL_RE.search(query)
+        if not match:
+            return None
+        return SpotifyUrl(
+            kind=SpotifyUrlKind(match.group(1)),
+            spotify_id=match.group(2),
+            url=match.group(0),
+        )
+
+    def track_from_url(self, url: str) -> Track | None:
+        parsed = self.parse_url(url)
+        if parsed is None:
+            return None
+        if parsed.kind is not SpotifyUrlKind.TRACK:
+            raise UnsupportedSpotifyUrl(parsed.kind)
+        return self._track_lookup(parsed.url)
+
+    def search_track(self, query: str) -> Track | None:
+        try:
+            response = self._client.search(q=query, type="track", limit=1)
+        except Exception as exc:
+            log.warning("[resolve] spotify search failed: %s", exc)
+            return None
+        items = (response or {}).get("tracks", {}).get("items", [])
+        return self._track_from_obj(items[0]) if items else None
+
+    def _track_lookup(self, url_or_id: str) -> Track | None:
+        try:
+            spotify_track = self._client.track(url_or_id)
+        except Exception as exc:
+            log.warning("[resolve] spotify track lookup failed: %s", exc)
+            return None
+        return self._track_from_obj(spotify_track) if spotify_track else None
+
+    @staticmethod
+    def _track_from_obj(spotify_track: dict[str, Any]) -> Track:
+        return Track(
+            title=str(spotify_track["name"]),
+            author=", ".join(artist["name"] for artist in spotify_track["artists"]) or "",
+            duration_ms=int(spotify_track["duration_ms"]),
+            webpage_url=str(spotify_track.get("external_urls", {}).get("spotify", "")),
+            isrc=(spotify_track.get("external_ids") or {}).get("isrc"),
+        )

@@ -1,0 +1,16 @@
+services:
+  bot:
+    build: ./bot
+    container_name: siren-bot
+    restart: unless-stopped
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_GUILD_IDS=${DISCORD_GUILD_IDS}
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      # Optional. Set to a path inside the container (e.g. /app/data/cookies.txt)
+      # if YouTube starts demanding "Sign in to confirm you're not a bot".
+      - YT_COOKIES_FILE=${YT_COOKIES_FILE:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./bot/data:/app/data

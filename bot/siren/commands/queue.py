@@ -76,6 +76,18 @@ def format_queue_message(player: Any, *, now: datetime | None = None) -> str:
     return "\n".join(lines)
 
 
+def format_nowplaying_message(player: Any) -> str:
+    if player.current is None:
+        return "Nothing playing."
+    if player.voice and player.voice.is_paused():
+        state = "Paused"
+    elif player.voice and player.voice.is_playing():
+        state = "Now playing"
+    else:
+        state = "Loading"
+    return f"**{state}:** {player.current.author} — {player.current.title} `[{current_progress(player)}]`"
+
+
 class QueueCommand(CommandBase):
     def register(self) -> None:
         @self.bot.tree.command(name="queue", description="Show what's playing and what's queued.")

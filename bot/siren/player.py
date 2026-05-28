@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from collections import deque
 from collections.abc import Callable
@@ -133,6 +134,42 @@ class GuildPlayer:
             elif self.voice and not self.voice.is_playing():
                 await self._play_next_unlocked()
             self.reconcile_idle()
+
+    def _queue_index(self, position: int) -> int:
+        index = position - 1
+        if index < 0 or index >= len(self.queue):
+            raise IndexError("queue position out of range")
+        return index
+
+    def remove_queued(self, position: int) -> Track:
+        items = list(self.queue)
+        removed = items.pop(self._queue_index(position))
+        self.queue = deque(items)
+        self.reconcile_idle()
+        return removed
+
+    def move_queued(self, from_position: int, to_position: int) -> Track:
+        items = list(self.queue)
+        from_index = self._queue_index(from_position)
+        if to_position < 1 or to_position > len(items):
+            raise IndexError("queue position out of range")
+        moved = items.pop(from_index)
+        items.insert(to_position - 1, moved)
+        self.queue = deque(items)
+        return moved
+
+    def clear_queue(self) -> int:
+        removed = len(self.queue)
+        self.queue.clear()
+        self.reconcile_idle()
+        return removed
+
+    def shuffle_queue(self, *, seed: int | None = None) -> int:
+        items = list(self.queue)
+        rng = random.Random(seed) if seed is not None else random
+        rng.shuffle(items)
+        self.queue = deque(items)
+        return len(items)
 
     async def play_next(self, completed_generation: int | None = None) -> None:
         async with self._transition_lock:

@@ -114,7 +114,12 @@ class SpotifyService:
                 log.warning("[resolve] spotify album lookup failed: %s", exc)
                 return tracks
             items = (response or {}).get("items", [])
-            tracks.extend(self._track_from_obj(item) for item in items if item)
+            for item in items:
+                if not item:
+                    continue
+                track = self._try_track_from_obj(item)
+                if track is not None:
+                    tracks.append(track)
             if not (response or {}).get("next") or not items:
                 return tracks
             offset += len(items)
@@ -153,7 +158,7 @@ class SpotifyService:
         try:
             return self._track_from_obj(spotify_track)
         except (KeyError, TypeError, ValueError) as exc:
-            log.warning("[resolve] skipping malformed spotify playlist track: %s", exc)
+            log.warning("[resolve] skipping malformed spotify track: %s", exc)
             return None
 
     @staticmethod

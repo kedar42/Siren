@@ -70,6 +70,27 @@ class SpotifyExpansionTests(unittest.TestCase):
         self.assertEqual([track.title for track in tracks], ["A0", "A1", "A2"])
         self.assertEqual([call["offset"] for call in client.album_calls], [0, 2])
 
+    def test_album_tracks_skip_malformed_track_objects(self) -> None:
+        class MalformedAlbumClient(FakeSpotifyClient):
+            def album_tracks(self, album_id: str, limit: int = 50, offset: int = 0) -> dict[str, object]:
+                return {
+                    "items": [
+                        spotify_track("Good", 1),
+                        {"name": "Bad"},
+                        spotify_track("Also Good", 2),
+                    ],
+                    "next": None,
+                }
+
+        service = SpotifyService(settings(), client=MalformedAlbumClient())
+
+        try:
+            tracks = service.tracks_from_url("https://open.spotify.com/album/album123")
+        except KeyError as exc:
+            self.fail(f"malformed album track should be skipped, not raised: {exc}")
+
+        self.assertEqual([track.title for track in tracks], ["Good", "Also Good"])
+
     def test_playlist_tracks_skips_invalid_entries_and_caps_default_at_50(self) -> None:
         client = FakeSpotifyClient()
         service = SpotifyService(settings(), client=client)

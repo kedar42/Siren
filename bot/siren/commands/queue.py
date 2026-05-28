@@ -99,4 +99,8 @@ class QueueCommand(CommandBase):
             if player.current is None and not player.queue:
                 await interaction.response.send_message("Queue is empty.", ephemeral=True)
                 return
-            await interaction.response.send_message(format_queue_message(player))
+            from .views import PlaybackControlsView
+
+            await interaction.response.send_message(
+                format_queue_message(player), view=PlaybackControlsView(self.bot, guild.id)
+            )

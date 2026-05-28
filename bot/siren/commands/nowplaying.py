@@ -17,4 +17,8 @@ class NowPlayingCommand(CommandBase):
             if player.current is None:
                 await interaction.response.send_message(format_nowplaying_message(player), ephemeral=True)
                 return
-            await interaction.response.send_message(format_nowplaying_message(player))
+            from .views import PlaybackControlsView
+
+            await interaction.response.send_message(
+                format_nowplaying_message(player), view=PlaybackControlsView(self.bot, guild.id, compact=True)
+            )

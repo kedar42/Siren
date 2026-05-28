@@ -79,6 +79,24 @@ class MappingYouTube:
         return Track("Resolved", "Uploader", 100000, url), "https://stream.test/audio"
 
 
+class SlowMappingYouTube(MappingYouTube):
+    def __init__(self, candidates_by_query: dict[str, list[Track]], *, delay_seconds: float = 0.05) -> None:
+        super().__init__(candidates_by_query)
+        self.delay_seconds = delay_seconds
+        self.active_searches = 0
+        self.max_active_searches = 0
+
+    async def search(self, query: str, limit: int = 5) -> list[Track]:
+        self.searches.append(query)
+        self.active_searches += 1
+        self.max_active_searches = max(self.max_active_searches, self.active_searches)
+        try:
+            await asyncio.sleep(self.delay_seconds)
+            return self.candidates_by_query.get(query, [])
+        finally:
+            self.active_searches -= 1
+
+
 ANCHOR = Track("Never Gonna Give You Up", "Rick Astley", 213000, "spotify", "GBARL9300135")
 
 
@@ -188,6 +206,37 @@ class ResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         self.assertEqual([track.webpage_url for track in result.all_tracks], ["youtube-a"])
         self.assertEqual(result.message, "Queued 1 track. Skipped 1 track that couldn't be resolved.")
+
+    async def test_spotify_playlist_at_cap_reports_limit_in_message(self) -> None:
+        anchors = [Track(f"Song {index}", "Artist", 100000, f"spotify-{index}") for index in range(50)]
+        youtube = MappingYouTube(
+            {
+                f"Artist - Song {index}": [Track(f"Song {index}", "Artist", 100000, f"youtube-{index}")]
+                for index in range(50)
+            }
+        )
+        resolver = TrackResolver(FakeSpotify(anchors=anchors), youtube)
+
+        result = await resolver.resolve("https://open.spotify.com/playlist/playlist123")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(result.all_tracks), 50)
+        self.assertEqual(result.message, "Queued 50 tracks. Playlist limited to first 50 tracks.")
+
+    async def test_expanded_spotify_resolution_overlaps_and_preserves_order(self) -> None:
+        anchors = [Track(f"Song {index}", "Artist", 100000, f"spotify-{index}") for index in range(6)]
+        youtube = SlowMappingYouTube(
+            {
+                f"Artist - Song {index}": [Track(f"Song {index}", "Artist", 100000, f"youtube-{index}")]
+                for index in range(6)
+            }
+        )
+        resolver = TrackResolver(FakeSpotify(anchors=anchors), youtube)
+
+        result = await resolver.resolve("https://open.spotify.com/album/album123")
+
+        self.assertGreater(youtube.max_active_searches, 1)
+        self.assertEqual([track.webpage_url for track in result.all_tracks], [f"youtube-{index}" for index in range(6)])
 
     async def test_spotify_playlist_total_resolution_failure_returns_no_tracks(self) -> None:
         anchors = [Track("Song A", "Artist", 100000, "spotify-a"), Track("Song B", "Artist", 110000, "spotify-b")]

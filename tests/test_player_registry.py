@@ -213,6 +213,52 @@ class GuildPlayerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(player.current.title, "Second")
         self.assertEqual(voice.play_calls, 2)
 
+    async def test_error_after_callback_does_not_advance_queue(self) -> None:
+        bot = FakeBot()
+        bot.loop = asyncio.get_running_loop()
+        voice = StatefulVoice()
+        player = GuildPlayer(bot, 123, ImmediateYouTube(), settings())
+        player.voice = voice
+
+        with patch("siren.player.discord.FFmpegOpusAudio.from_probe", return_value=object()):
+            first = Track("First", "Artist", 1000, "first-url")
+            second = Track("Second", "Artist", 1000, "second-url")
+            player.queue.extend([first, second])
+            await player.play_next()
+            first_after = voice.after_callbacks[0]
+
+            first_after(RuntimeError("voice disconnected"))
+            await asyncio.sleep(0.01)
+
+        self.assertIsNone(player.current)
+        self.assertEqual(list(player.queue), [second])
+        self.assertEqual(voice.play_calls, 1)
+
+    async def test_clean_after_callback_advances_queue(self) -> None:
+        bot = FakeBot()
+        bot.loop = asyncio.get_running_loop()
+        voice = StatefulVoice()
+        player = GuildPlayer(bot, 123, ImmediateYouTube(), settings())
+        player.voice = voice
+
+        with patch("siren.player.discord.FFmpegOpusAudio.from_probe", return_value=object()):
+            player.queue.extend(
+                [
+                    Track("First", "Artist", 1000, "first-url"),
+                    Track("Second", "Artist", 1000, "second-url"),
+                ]
+            )
+            await player.play_next()
+            first_after = voice.after_callbacks[0]
+            voice.playing = False
+
+            first_after(None)
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(player.current.title, "Second")
+        self.assertEqual(list(player.queue), [])
+        self.assertEqual(voice.play_calls, 2)
+
     async def test_stop_waits_for_playback_transition_before_clearing_voice(self) -> None:
         youtube = BlockingYouTube()
         voice = FakeVoice()

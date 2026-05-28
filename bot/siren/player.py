@@ -282,9 +282,19 @@ class GuildPlayer:
     def _after_play(self, error: Exception | None, generation: int) -> None:
         if error:
             log.error("[ffmpeg %s] playback error: %r", self.tag, error)
+            asyncio.run_coroutine_threadsafe(self._handle_playback_error(generation), self.bot.loop)
         else:
             log.info("[ffmpeg %s] playback finished cleanly", self.tag)
-        asyncio.run_coroutine_threadsafe(self.play_next(generation), self.bot.loop)
+            asyncio.run_coroutine_threadsafe(self.play_next(generation), self.bot.loop)
+
+    async def _handle_playback_error(self, completed_generation: int) -> None:
+        async with self._transition_lock:
+            if completed_generation != self._playback_generation:
+                log.info("[player %s] ignoring stale playback error callback", self.tag)
+                return
+            self.current = None
+            self._clear_timing()
+            self.reconcile_idle()
 
     async def skip(self) -> None:
         if self.voice and (self.voice.is_playing() or self.voice.is_paused()):

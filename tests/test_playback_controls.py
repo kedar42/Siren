@@ -72,9 +72,14 @@ class FakePlayer:
 
     async def skip(self) -> None:
         self.skip_calls += 1
+        if self.queue:
+            self.current = self.queue.popleft()
 
     async def stop(self) -> None:
         self.stop_calls += 1
+        self.current = None
+        self.queue.clear()
+        self.voice = None
 
 
 class FakeMessage:
@@ -105,6 +110,9 @@ class FakeInteraction:
         self.response = FakeResponse()
         self.message = FakeMessage()
         self.guild = None
+
+    async def original_response(self):
+        return self.message
 
 
 class FakeGuild:
@@ -175,14 +183,16 @@ class PlaybackControlsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(player.voice.pause_calls, 1)
         self.assertEqual(player.paused_marks, 1)
-        self.assertEqual(interaction.response.messages, [("Paused.", True)])
+        self.assertEqual(interaction.response.messages, [])
+        self.assertIn("**Paused:** Artist — Current", interaction.message.edits[0]["content"])
 
         interaction = FakeInteraction()
         await view.handle_pause_resume(interaction)
 
         self.assertEqual(player.voice.resume_calls, 1)
         self.assertEqual(player.resumed_marks, 1)
-        self.assertEqual(interaction.response.messages, [("Resumed.", True)])
+        self.assertEqual(interaction.response.messages, [])
+        self.assertIn("**Now playing:** Artist — Current", interaction.message.edits[0]["content"])
 
     async def test_skip_calls_player_skip(self) -> None:
         player = FakePlayer()
@@ -192,7 +202,8 @@ class PlaybackControlsTests(unittest.IsolatedAsyncioTestCase):
         await view.handle_skip(interaction)
 
         self.assertEqual(player.skip_calls, 1)
-        self.assertEqual(interaction.response.messages, [("Skipped.", True)])
+        self.assertEqual(interaction.response.messages, [])
+        self.assertIn("**Now playing:** Other — Next", interaction.message.edits[0]["content"])
 
     async def test_stop_calls_player_stop(self) -> None:
         player = FakePlayer()
@@ -202,7 +213,29 @@ class PlaybackControlsTests(unittest.IsolatedAsyncioTestCase):
         await view.handle_stop(interaction)
 
         self.assertEqual(player.stop_calls, 1)
-        self.assertEqual(interaction.response.messages, [("Stopped.", True)])
+        self.assertEqual(interaction.response.messages, [])
+        self.assertEqual(interaction.message.edits[0]["content"], "Queue is empty.")
+        self.assertTrue(all(item.disabled for item in view.children))
+
+    async def test_compact_stop_edits_source_message_to_nothing_playing(self) -> None:
+        player = FakePlayer()
+        view = PlaybackControlsView(FakeBot(player), 123, compact=True)
+        interaction = FakeInteraction()
+
+        await view.handle_stop(interaction)
+
+        self.assertEqual(interaction.message.edits[0]["content"], "Nothing playing.")
+        self.assertTrue(all(item.disabled for item in view.children))
+
+    async def test_on_timeout_disables_buttons_and_edits_stored_message_view(self) -> None:
+        view = PlaybackControlsView(FakeBot(FakePlayer()), 123)
+        message = FakeMessage()
+        view.message = message
+
+        await view.on_timeout()
+
+        self.assertTrue(all(item.disabled for item in view.children))
+        self.assertEqual(message.edits, [{"view": view}])
 
     async def test_stale_or_invalid_state_sends_ephemeral_error(self) -> None:
         view = PlaybackControlsView(FakeBot(None), 123)
@@ -234,6 +267,7 @@ class PlaybackControlsTests(unittest.IsolatedAsyncioTestCase):
         sent = interaction.response.sent[0]
         self.assertIsInstance(sent["view"], PlaybackControlsView)
         self.assertFalse(sent["view"].compact)
+        self.assertIs(sent["view"].message, interaction.message)
 
     async def test_nowplaying_command_sends_compact_controls_view_when_current_exists(self) -> None:
         player = FakePlayer()
@@ -247,6 +281,7 @@ class PlaybackControlsTests(unittest.IsolatedAsyncioTestCase):
         sent = interaction.response.sent[0]
         self.assertIsInstance(sent["view"], PlaybackControlsView)
         self.assertTrue(sent["view"].compact)
+        self.assertIs(sent["view"].message, interaction.message)
 
 
 if __name__ == "__main__":

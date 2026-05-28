@@ -19,6 +19,6 @@ class NowPlayingCommand(CommandBase):
                 return
             from .views import PlaybackControlsView
 
-            await interaction.response.send_message(
-                format_nowplaying_message(player), view=PlaybackControlsView(self.bot, guild.id, compact=True)
-            )
+            view = PlaybackControlsView(self.bot, guild.id, compact=True)
+            await interaction.response.send_message(format_nowplaying_message(player), view=view)
+            view.message = await interaction.original_response()

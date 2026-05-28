@@ -101,6 +101,6 @@ class QueueCommand(CommandBase):
                 return
             from .views import PlaybackControlsView
 
-            await interaction.response.send_message(
-                format_queue_message(player), view=PlaybackControlsView(self.bot, guild.id)
-            )
+            view = PlaybackControlsView(self.bot, guild.id)
+            await interaction.response.send_message(format_queue_message(player), view=view)
+            view.message = await interaction.original_response()

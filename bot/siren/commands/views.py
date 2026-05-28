@@ -17,6 +17,7 @@ class PlaybackControlsView(discord.ui.View):
         self.bot = bot
         self.guild_id = guild_id
         self.compact = compact
+        self.message: Any | None = None
 
     def player(self) -> GuildPlayer | None:
         return self.bot.players.get(self.guild_id) if self.bot.players else None
@@ -31,7 +32,27 @@ class PlaybackControlsView(discord.ui.View):
             return
         message = getattr(interaction, "message", None)
         if message is not None:
+            self.message = message
             await message.edit(content=content, view=self)
+
+    def _disable_buttons(self) -> None:
+        for item in self.children:
+            if hasattr(item, "disabled"):
+                item.disabled = True
+
+    def _current_content(self, player: GuildPlayer | None) -> str:
+        if self.compact:
+            if player is None or player.current is None:
+                return "Nothing playing."
+            return format_nowplaying_message(player)
+        if player is None or (player.current is None and not player.queue):
+            return "Queue is empty."
+        return format_queue_message(player)
+
+    async def on_timeout(self) -> None:
+        self._disable_buttons()
+        if self.message is not None:
+            await self.message.edit(view=self)
 
     async def handle_pause_resume(self, interaction: discord.Interaction) -> None:
         player = self.player()
@@ -41,12 +62,12 @@ class PlaybackControlsView(discord.ui.View):
         if player.voice.is_playing():
             player.voice.pause()
             player.mark_paused()
-            await interaction.response.send_message("Paused.", ephemeral=True)
+            await self._edit_message(interaction, self._current_content(player))
             return
         if player.voice.is_paused():
             player.voice.resume()
             player.mark_resumed()
-            await interaction.response.send_message("Resumed.", ephemeral=True)
+            await self._edit_message(interaction, self._current_content(player))
             return
         await self._send_error(interaction, "Nothing playing.")
 
@@ -61,7 +82,7 @@ class PlaybackControlsView(discord.ui.View):
             await self._send_error(interaction, "Nothing playing.")
             return
         await player.skip()
-        await interaction.response.send_message("Skipped.", ephemeral=True)
+        await self._edit_message(interaction, self._current_content(player))
 
     async def handle_stop(self, interaction: discord.Interaction) -> None:
         player = self.player()
@@ -69,7 +90,8 @@ class PlaybackControlsView(discord.ui.View):
             await self._send_error(interaction, "Not connected.")
             return
         await player.stop()
-        await interaction.response.send_message("Stopped.", ephemeral=True)
+        self._disable_buttons()
+        await self._edit_message(interaction, self._current_content(player))
 
     async def handle_refresh(self, interaction: discord.Interaction) -> None:
         player = self.player()

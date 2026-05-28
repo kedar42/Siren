@@ -299,6 +299,7 @@ class GuildPlayer:
     async def skip(self) -> None:
         if self.voice and (self.voice.is_playing() or self.voice.is_paused()):
             log.info("[player %s] skip requested", self.tag)
+            self.current = None
             self._clear_timing()
             self.voice.stop()
 

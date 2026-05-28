@@ -39,6 +39,12 @@ class FakeSpotify:
         return SpotifyService.parse_url(query)
 
 
+class ExpandedTracks(list[Track]):
+    def __init__(self, tracks: list[Track], *, truncated: bool = False) -> None:
+        super().__init__(tracks)
+        self.truncated = truncated
+
+
 class SlowSpotify(FakeSpotify):
     def __init__(self, anchor: Track | None = None, *, delay_seconds: float = 0.2) -> None:
         super().__init__(anchor=anchor)
@@ -207,8 +213,27 @@ class ResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([track.webpage_url for track in result.all_tracks], ["youtube-a"])
         self.assertEqual(result.message, "Queued 1 track. Skipped 1 track that couldn't be resolved.")
 
-    async def test_spotify_playlist_at_cap_reports_limit_in_message(self) -> None:
+    async def test_exactly_50_track_spotify_playlist_does_not_report_limit(self) -> None:
         anchors = [Track(f"Song {index}", "Artist", 100000, f"spotify-{index}") for index in range(50)]
+        youtube = MappingYouTube(
+            {
+                f"Artist - Song {index}": [Track(f"Song {index}", "Artist", 100000, f"youtube-{index}")]
+                for index in range(50)
+            }
+        )
+        resolver = TrackResolver(FakeSpotify(anchors=anchors), youtube)
+
+        result = await resolver.resolve("https://open.spotify.com/playlist/playlist123")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(result.all_tracks), 50)
+        self.assertEqual(result.message, "Queued 50 tracks.")
+
+    async def test_truncated_spotify_playlist_reports_limit_in_message(self) -> None:
+        anchors = ExpandedTracks(
+            [Track(f"Song {index}", "Artist", 100000, f"spotify-{index}") for index in range(50)],
+            truncated=True,
+        )
         youtube = MappingYouTube(
             {
                 f"Artist - Song {index}": [Track(f"Song {index}", "Artist", 100000, f"youtube-{index}")]

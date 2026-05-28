@@ -40,6 +40,12 @@ SPOTIFY_URL_RE = re.compile(
 MAX_PLAYLIST_TRACKS = 50
 
 
+class SpotifyTrackList(list[Track]):
+    def __init__(self, tracks: list[Track] | None = None, *, truncated: bool = False) -> None:
+        super().__init__(tracks or [])
+        self.truncated = truncated
+
+
 class SpotifyService:
     def __init__(self, settings: Settings, client: Any | None = None) -> None:
         self._client = client if client is not None else spotipy.Spotify(
@@ -114,7 +120,7 @@ class SpotifyService:
             offset += len(items)
 
     def _playlist_tracks(self, playlist_id: str, *, playlist_limit: int) -> list[Track]:
-        tracks: list[Track] = []
+        tracks = SpotifyTrackList()
         offset = 0
         while len(tracks) < playlist_limit:
             try:
@@ -128,16 +134,27 @@ class SpotifyService:
                 log.warning("[resolve] spotify playlist lookup failed: %s", exc)
                 return tracks
             items = (response or {}).get("items", [])
-            for item in items:
+            for index, item in enumerate(items):
                 spotify_track = (item or {}).get("track")
                 if spotify_track:
-                    tracks.append(self._track_from_obj(spotify_track))
+                    track = self._try_track_from_obj(spotify_track)
+                    if track is None:
+                        continue
+                    tracks.append(track)
                     if len(tracks) >= playlist_limit:
+                        tracks.truncated = bool((response or {}).get("next")) or index < len(items) - 1
                         return tracks
             if not (response or {}).get("next") or not items:
                 return tracks
             offset += len(items)
         return tracks
+
+    def _try_track_from_obj(self, spotify_track: dict[str, Any]) -> Track | None:
+        try:
+            return self._track_from_obj(spotify_track)
+        except (KeyError, TypeError, ValueError) as exc:
+            log.warning("[resolve] skipping malformed spotify playlist track: %s", exc)
+            return None
 
     @staticmethod
     def _track_from_obj(spotify_track: dict[str, Any]) -> Track:

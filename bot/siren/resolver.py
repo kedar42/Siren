@@ -98,7 +98,7 @@ class TrackResolver:
             if len(anchors) == 1:
                 self._log_anchor(anchors[0])
                 return await self._resolve_anchored(anchors[0], query)
-            at_playlist_cap = spotify_url.kind is SpotifyUrlKind.PLAYLIST and len(anchors) == MAX_PLAYLIST_TRACKS
+            at_playlist_cap = spotify_url.kind is SpotifyUrlKind.PLAYLIST and bool(getattr(anchors, "truncated", False))
             return await self._resolve_anchors(anchors, query, at_playlist_cap=at_playlist_cap)
 
         if is_url(query):

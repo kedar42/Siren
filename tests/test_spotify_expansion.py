@@ -82,6 +82,52 @@ class SpotifyExpansionTests(unittest.TestCase):
         self.assertEqual(tracks[-1].title, "P49")
         self.assertEqual([call["offset"] for call in client.playlist_calls], [0, 3])
         self.assertEqual(client.playlist_calls[0]["additional_types"], ("track",))
+        self.assertTrue(tracks.truncated)
+
+    def test_exactly_50_track_playlist_is_not_marked_truncated(self) -> None:
+        class ExactPlaylistClient(FakeSpotifyClient):
+            def playlist_items(
+                self,
+                playlist_id: str,
+                limit: int = 50,
+                offset: int = 0,
+                additional_types: tuple[str, ...] = ("track",),
+            ) -> dict[str, object]:
+                return {
+                    "items": [{"track": spotify_track(f"P{index}", index)} for index in range(50)],
+                    "next": None,
+                }
+
+        service = SpotifyService(settings(), client=ExactPlaylistClient())
+
+        tracks = service.tracks_from_url("https://open.spotify.com/playlist/playlist123")
+
+        self.assertEqual(len(tracks), 50)
+        self.assertFalse(tracks.truncated)
+
+    def test_playlist_tracks_skip_malformed_track_objects(self) -> None:
+        class MalformedPlaylistClient(FakeSpotifyClient):
+            def playlist_items(
+                self,
+                playlist_id: str,
+                limit: int = 50,
+                offset: int = 0,
+                additional_types: tuple[str, ...] = ("track",),
+            ) -> dict[str, object]:
+                return {
+                    "items": [
+                        {"track": spotify_track("Good", 1)},
+                        {"track": {"name": "Bad"}},
+                        {"track": spotify_track("Also Good", 2)},
+                    ],
+                    "next": None,
+                }
+
+        service = SpotifyService(settings(), client=MalformedPlaylistClient())
+
+        tracks = service.tracks_from_url("https://open.spotify.com/playlist/playlist123")
+
+        self.assertEqual([track.title for track in tracks], ["Good", "Also Good"])
 
     def test_track_url_returns_single_track_anchor(self) -> None:
         class TrackClient(FakeSpotifyClient):

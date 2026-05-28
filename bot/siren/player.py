@@ -39,6 +39,7 @@ class GuildPlayer:
         self._transition_lock = asyncio.Lock()
         self._idle_task: asyncio.Task | None = None
         self._playback_generation = 0
+        self._voice_clear_requested = False
         self._started_at_monotonic: float | None = None
         self._elapsed_before_pause_ms = 0
         self._paused_at_monotonic: float | None = None
@@ -114,13 +115,27 @@ class GuildPlayer:
             self._idle_task.cancel()
             self._idle_task = None
 
-    def clear_voice_state(self) -> None:
+    async def clear_voice_state(self) -> None:
+        self._voice_clear_requested = True
+        async with self._transition_lock:
+            self._clear_voice_state_unlocked()
+
+    def _clear_voice_state_unlocked(self) -> None:
         log.info("[player %s] clearing stale voice state", self.tag)
         self.voice = None
         self.current = None
         self._clear_timing()
         self._playback_generation += 1
+        self._voice_clear_requested = False
         self.reconcile_idle()
+
+    def _voice_changed_during_prepare(self, voice: discord.VoiceClient) -> bool:
+        return self._voice_clear_requested or self.voice is not voice or not voice.is_connected()
+
+    def _abort_stale_prepare(self) -> None:
+        log.info("[player %s] voice changed during playback preparation; aborting track start", self.tag)
+        self.current = None
+        self._clear_timing()
 
     async def _idle_watcher(self) -> None:
         try:
@@ -192,6 +207,7 @@ class GuildPlayer:
                 log.warning("[player %s] no voice client; aborting", self.tag)
                 self.current = None
                 return
+            voice = self.voice
 
             self._clear_timing()
             track = self.queue.popleft()
@@ -207,6 +223,9 @@ class GuildPlayer:
             if not resolved:
                 log.warning("[stream %s] extract returned nothing; skipping track", self.tag)
                 continue
+            if self._voice_changed_during_prepare(voice):
+                self._abort_stale_prepare()
+                return
             _metadata, stream_url = resolved
             log.info("[stream %s] direct URL acquired (len=%d)", self.tag, len(stream_url))
 
@@ -220,12 +239,15 @@ class GuildPlayer:
             except Exception as exc:
                 log.exception("[ffmpeg %s] source construction failed: %s", self.tag, exc)
                 continue
+            if self._voice_changed_during_prepare(voice):
+                self._abort_stale_prepare()
+                return
 
             log.info("[ffmpeg %s] starting playback", self.tag)
             try:
                 self._playback_generation += 1
                 generation = self._playback_generation
-                self.voice.play(source, after=lambda error: self._after_play(error, generation))
+                voice.play(source, after=lambda error: self._after_play(error, generation))
                 self._start_timing()
             except discord.ClientException as exc:
                 log.error("[ffmpeg %s] play() rejected: %s", self.tag, exc)

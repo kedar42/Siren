@@ -72,6 +72,18 @@ class SequencedYouTube:
         return outcome, f"stream-{url}"
 
 
+class BlockingYouTube:
+    def __init__(self, outcome) -> None:
+        self.outcome = outcome
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def resolve_url(self, url: str):
+        self.started.set()
+        await self.release.wait()
+        return self.outcome, f"stream-{url}"
+
+
 def settings() -> Settings:
     return Settings.from_env(
         {
@@ -87,6 +99,11 @@ def track(index: int) -> Track:
 
 
 class PlaybackReliabilityTests(unittest.IsolatedAsyncioTestCase):
+    async def _clear_voice_state(self, player: GuildPlayer) -> None:
+        result = player.clear_voice_state()
+        if asyncio.iscoroutine(result):
+            await result
+
     async def test_failed_extraction_advances_to_next_playable_track(self) -> None:
         voice = FakeVoice()
         player = GuildPlayer(FakeBot(), 123, SequencedYouTube([RuntimeError("yt-dlp failed"), track(2)]), settings())
@@ -179,6 +196,55 @@ class PlaybackReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(player.current, track(2))
         self.assertEqual(player.voice.play_calls, 1)
+
+    async def test_clear_voice_state_during_extraction_prevents_stale_playback(self) -> None:
+        youtube = BlockingYouTube(track(1))
+        voice = FakeVoice()
+        player = GuildPlayer(FakeBot(), 123, youtube, settings())
+        player.voice = voice
+        player.queue.append(track(1))
+
+        with patch("siren.player.discord.FFmpegOpusAudio.from_probe", return_value=object()):
+            play_task = asyncio.create_task(player.play_next())
+            await youtube.started.wait()
+            cleanup_task = asyncio.create_task(self._clear_voice_state(player))
+            await asyncio.sleep(0)
+            youtube.release.set()
+            await play_task
+            await cleanup_task
+
+        self.assertEqual(voice.play_calls, 0)
+        self.assertIsNone(player.voice)
+        self.assertIsNone(player.current)
+        self.assertIsNone(player.current_elapsed_ms())
+
+    async def test_clear_voice_state_during_ffmpeg_probe_prevents_stale_playback(self) -> None:
+        voice = FakeVoice()
+        probe_started = asyncio.Event()
+        release_probe = asyncio.Event()
+
+        async def from_probe(*args, **kwargs):
+            probe_started.set()
+            await release_probe.wait()
+            return object()
+
+        player = GuildPlayer(FakeBot(), 123, SequencedYouTube([track(1)]), settings())
+        player.voice = voice
+        player.queue.append(track(1))
+
+        with patch("siren.player.discord.FFmpegOpusAudio.from_probe", side_effect=from_probe):
+            play_task = asyncio.create_task(player.play_next())
+            await probe_started.wait()
+            cleanup_task = asyncio.create_task(self._clear_voice_state(player))
+            await asyncio.sleep(0)
+            release_probe.set()
+            await play_task
+            await cleanup_task
+
+        self.assertEqual(voice.play_calls, 0)
+        self.assertIsNone(player.voice)
+        self.assertIsNone(player.current)
+        self.assertIsNone(player.current_elapsed_ms())
 
 
 if __name__ == "__main__":

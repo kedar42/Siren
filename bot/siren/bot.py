@@ -50,7 +50,7 @@ class SirenBot(commands.Bot):
             if before.channel is not None and after.channel is None and self.players is not None:
                 player = self.players.get(member.guild.id)
                 if player is not None:
-                    await player.clear_voice_state()
+                    await player.clear_voice_state(player.voice)
             return
         if self.players is None:
             return

@@ -99,8 +99,8 @@ def track(index: int) -> Track:
 
 
 class PlaybackReliabilityTests(unittest.IsolatedAsyncioTestCase):
-    async def _clear_voice_state(self, player: GuildPlayer) -> None:
-        result = player.clear_voice_state()
+    async def _clear_voice_state(self, player: GuildPlayer, expected_voice=None) -> None:
+        result = player.clear_voice_state(expected_voice)
         if asyncio.iscoroutine(result):
             await result
 
@@ -215,6 +215,30 @@ class PlaybackReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(voice.play_calls, 0)
         self.assertIsNone(player.voice)
+        self.assertIsNone(player.current)
+        self.assertIsNone(player.current_elapsed_ms())
+
+    async def test_clear_voice_state_for_old_voice_does_not_clear_reconnected_voice(self) -> None:
+        youtube = BlockingYouTube(track(1))
+        old_voice = FakeVoice()
+        new_voice = FakeVoice()
+        player = GuildPlayer(FakeBot(), 123, youtube, settings())
+        player.voice = old_voice
+        player.queue.append(track(1))
+
+        with patch("siren.player.discord.FFmpegOpusAudio.from_probe", return_value=object()):
+            play_task = asyncio.create_task(player.play_next())
+            await youtube.started.wait()
+            cleanup_task = asyncio.create_task(self._clear_voice_state(player, old_voice))
+            await asyncio.sleep(0)
+            player.voice = new_voice
+            youtube.release.set()
+            await play_task
+            await cleanup_task
+
+        self.assertEqual(old_voice.play_calls, 0)
+        self.assertIs(player.voice, new_voice)
+        self.assertTrue(new_voice.is_connected())
         self.assertIsNone(player.current)
         self.assertIsNone(player.current_elapsed_ms())
 

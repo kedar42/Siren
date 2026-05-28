@@ -39,7 +39,7 @@ class GuildPlayer:
         self._transition_lock = asyncio.Lock()
         self._idle_task: asyncio.Task | None = None
         self._playback_generation = 0
-        self._voice_clear_requested = False
+        self._voice_clear_requested_for: list[discord.VoiceClient] = []
         self._started_at_monotonic: float | None = None
         self._elapsed_before_pause_ms = 0
         self._paused_at_monotonic: float | None = None
@@ -115,22 +115,29 @@ class GuildPlayer:
             self._idle_task.cancel()
             self._idle_task = None
 
-    async def clear_voice_state(self) -> None:
-        self._voice_clear_requested = True
+    async def clear_voice_state(self, expected_voice: discord.VoiceClient | None = None) -> None:
+        target_voice = expected_voice if expected_voice is not None else self.voice
+        if target_voice is not None and target_voice not in self._voice_clear_requested_for:
+            self._voice_clear_requested_for.append(target_voice)
         async with self._transition_lock:
-            self._clear_voice_state_unlocked()
+            self._clear_voice_state_unlocked(target_voice)
 
-    def _clear_voice_state_unlocked(self) -> None:
+    def _clear_voice_state_unlocked(self, expected_voice: discord.VoiceClient | None = None) -> None:
+        if expected_voice is not None and expected_voice in self._voice_clear_requested_for:
+            self._voice_clear_requested_for.remove(expected_voice)
+        if expected_voice is not None and self.voice is not expected_voice:
+            log.info("[player %s] stale voice cleanup skipped; voice changed", self.tag)
+            self.reconcile_idle()
+            return
         log.info("[player %s] clearing stale voice state", self.tag)
         self.voice = None
         self.current = None
         self._clear_timing()
         self._playback_generation += 1
-        self._voice_clear_requested = False
         self.reconcile_idle()
 
     def _voice_changed_during_prepare(self, voice: discord.VoiceClient) -> bool:
-        return self._voice_clear_requested or self.voice is not voice or not voice.is_connected()
+        return voice in self._voice_clear_requested_for or self.voice is not voice or not voice.is_connected()
 
     def _abort_stale_prepare(self) -> None:
         log.info("[player %s] voice changed during playback preparation; aborting track start", self.tag)

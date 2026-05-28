@@ -11,9 +11,12 @@ if TYPE_CHECKING:
     from ..player import GuildPlayer
 
 
+PLAYBACK_CONTROLS_TIMEOUT_SECONDS = 300
+
+
 class PlaybackControlsView(discord.ui.View):
     def __init__(self, bot: SirenBot, guild_id: int, *, compact: bool = False) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=PLAYBACK_CONTROLS_TIMEOUT_SECONDS)
         self.bot = bot
         self.guild_id = guild_id
         self.compact = compact

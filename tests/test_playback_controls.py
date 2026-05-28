@@ -2,6 +2,7 @@ import unittest
 import asyncio
 from collections import deque
 
+from siren.commands import views
 from siren.commands.views import PlaybackControlsView
 from siren.commands.nowplaying import NowPlayingCommand
 from siren.commands.queue import QueueCommand
@@ -184,6 +185,13 @@ class FakeCommandBot:
 
 
 class PlaybackControlsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_playback_controls_view_has_finite_non_persistent_timeout(self) -> None:
+        view = PlaybackControlsView(FakeBot(FakePlayer()), 123)
+
+        self.assertTrue(hasattr(views, "PLAYBACK_CONTROLS_TIMEOUT_SECONDS"))
+        self.assertIsNotNone(view.timeout)
+        self.assertEqual(view.timeout, views.PLAYBACK_CONTROLS_TIMEOUT_SECONDS)
+
     async def test_edit_message_uses_response_edit_message_before_response_is_done(self) -> None:
         view = PlaybackControlsView(FakeBot(FakePlayer()), 123)
         interaction = FakeInteraction()

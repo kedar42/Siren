@@ -31,13 +31,11 @@ class FakeVoice:
         self.after_callbacks = []
         self.playing = False
         self.connected = True
+        self._channel = type("Channel", (), {"members": []})()
 
     @property
     def channel(self):
-        class Channel:
-            members = []
-
-        return Channel()
+        return self._channel
 
     def is_connected(self) -> bool:
         return self.connected

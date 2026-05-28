@@ -23,11 +23,18 @@ JUNK_PATTERNS = re.compile(
 @dataclass(frozen=True)
 class ResolveResult:
     track: Track | None = None
+    tracks: list[Track] | None = None
     message: str = ""
 
     @property
     def ok(self) -> bool:
-        return self.track is not None
+        return bool(self.all_tracks)
+
+    @property
+    def all_tracks(self) -> list[Track]:
+        if self.tracks is not None:
+            return self.tracks
+        return [self.track] if self.track is not None else []
 
 
 URL_LIKE_PREFIXES = (
@@ -81,14 +88,16 @@ class TrackResolver:
         spotify_url = self.spotify.parse_url(query)
         if spotify_url:
             try:
-                anchor = await asyncio.to_thread(self.spotify.track_from_url, query)
+                anchors = await asyncio.to_thread(self.spotify.tracks_from_url, query)
             except UnsupportedSpotifyUrl as exc:
                 return ResolveResult(message=str(exc))
-            if not anchor:
+            if not anchors:
                 log.warning("[resolve] spotify URL did not resolve: %s", query)
                 return ResolveResult(message=f"Couldn't resolve `{query}`.")
-            self._log_anchor(anchor)
-            return await self._resolve_anchored(anchor, query)
+            if len(anchors) == 1:
+                self._log_anchor(anchors[0])
+                return await self._resolve_anchored(anchors[0], query)
+            return await self._resolve_anchors(anchors, query)
 
         if is_url(query):
             log.info("[resolve] direct URL -> yt-dlp")
@@ -159,6 +168,23 @@ class TrackResolver:
         log.info("[resolve] picked: %s - %s (score=%.2f, url=%s)", best.author, best.title, best_score, best.webpage_url)
         best.isrc = anchor.isrc
         return ResolveResult(track=best)
+
+    async def _resolve_anchors(self, anchors: list[Track], original_query: str) -> ResolveResult:
+        tracks: list[Track] = []
+        for anchor in anchors:
+            self._log_anchor(anchor)
+            result = await self._resolve_anchored(anchor, original_query)
+            if result.track is not None:
+                tracks.append(result.track)
+
+        skipped = len(anchors) - len(tracks)
+        if not tracks:
+            return ResolveResult(message=f"Couldn't resolve any tracks from `{original_query}`.")
+
+        message = f"Queued {len(tracks)} {'track' if len(tracks) == 1 else 'tracks'}."
+        if skipped:
+            message += f" Skipped {skipped} {'track' if skipped == 1 else 'tracks'} that couldn't be resolved."
+        return ResolveResult(track=tracks[0], tracks=tracks, message=message)
 
     @staticmethod
     def _log_anchor(anchor: Track) -> None:

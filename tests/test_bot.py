@@ -22,9 +22,10 @@ class FakeTree:
 
 
 class FakeVoice:
-    def __init__(self, channel, *, connected=True) -> None:
+    def __init__(self, channel, *, connected=True, session_id=None) -> None:
         self.channel = channel
         self.connected = connected
+        self.session_id = session_id
 
     def is_connected(self) -> bool:
         return self.connected
@@ -145,14 +146,14 @@ class BotVoiceStateTests(unittest.IsolatedAsyncioTestCase):
         bot = make_bot()
         bot._connection.user = type("User", (), {"id": 42})()
         channel = object()
-        stale_voice = FakeVoice(channel, connected=True)
+        stale_voice = FakeVoice(channel, connected=True, session_id="old-session")
         current_track = object()
         player = FakePlayer(stale_voice, current=current_track)
         bot.attach_players(FakePlayers(player))
 
         guild = type("Guild", (), {"id": 123})()
         member = type("Member", (), {"id": 42, "guild": guild})()
-        before = type("VoiceState", (), {"channel": channel})()
+        before = type("VoiceState", (), {"channel": channel, "session_id": "old-session"})()
         after = type("VoiceState", (), {"channel": None})()
 
         await bot.on_voice_state_update(member, before, after)
@@ -160,3 +161,23 @@ class BotVoiceStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(player.clear_calls, [stale_voice])
         self.assertIsNone(player.voice)
         self.assertIsNone(player.current)
+
+    async def test_bot_self_disconnect_does_not_clear_active_fresh_voice_with_different_session(self) -> None:
+        bot = make_bot()
+        bot._connection.user = type("User", (), {"id": 42})()
+        channel = object()
+        fresh_voice = FakeVoice(channel, connected=True, session_id="fresh-session")
+        current_track = object()
+        player = FakePlayer(fresh_voice, current=current_track)
+        bot.attach_players(FakePlayers(player))
+
+        guild = type("Guild", (), {"id": 123})()
+        member = type("Member", (), {"id": 42, "guild": guild})()
+        before = type("VoiceState", (), {"channel": channel, "session_id": "old-session"})()
+        after = type("VoiceState", (), {"channel": None})()
+
+        await bot.on_voice_state_update(member, before, after)
+
+        self.assertEqual(player.clear_calls, [])
+        self.assertIs(player.voice, fresh_voice)
+        self.assertIs(player.current, current_track)

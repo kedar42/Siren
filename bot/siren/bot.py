@@ -51,9 +51,17 @@ class SirenBot(commands.Bot):
                 player = self.players.get(member.guild.id)
                 if player is not None:
                     disconnected_voice = player.voice
+                    before_session_id = getattr(before, "session_id", None)
+                    voice_session_id = getattr(disconnected_voice, "session_id", None)
+                    session_matches = (
+                        before_session_id is None
+                        or voice_session_id is None
+                        or before_session_id == voice_session_id
+                    )
                     if (
                         disconnected_voice is not None
                         and disconnected_voice.channel == before.channel
+                        and session_matches
                         and (not disconnected_voice.is_connected() or player.current is not None)
                     ):
                         await player.clear_voice_state(disconnected_voice)

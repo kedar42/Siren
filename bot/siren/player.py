@@ -114,6 +114,14 @@ class GuildPlayer:
             self._idle_task.cancel()
             self._idle_task = None
 
+    def clear_voice_state(self) -> None:
+        log.info("[player %s] clearing stale voice state", self.tag)
+        self.voice = None
+        self.current = None
+        self._clear_timing()
+        self._playback_generation += 1
+        self.reconcile_idle()
+
     async def _idle_watcher(self) -> None:
         try:
             await asyncio.sleep(self.settings.idle_timeout_seconds)
@@ -191,7 +199,11 @@ class GuildPlayer:
             log.info("[player %s] now playing: %s - %s", self.tag, track.author, track.title)
 
             log.info("[stream %s] extracting %s", self.tag, track.webpage_url)
-            resolved = await self.youtube.resolve_url(track.webpage_url)
+            try:
+                resolved = await self.youtube.resolve_url(track.webpage_url)
+            except Exception as exc:
+                log.exception("[stream %s] extraction failed: %s", self.tag, exc)
+                continue
             if not resolved:
                 log.warning("[stream %s] extract returned nothing; skipping track", self.tag)
                 continue

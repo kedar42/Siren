@@ -47,6 +47,10 @@ class SirenBot(commands.Bot):
         after: discord.VoiceState,
     ) -> None:
         if self.user is not None and member.id == self.user.id:
+            if before.channel is not None and after.channel is None and self.players is not None:
+                player = self.players.get(member.guild.id)
+                if player is not None:
+                    player.clear_voice_state()
             return
         if self.players is None:
             return

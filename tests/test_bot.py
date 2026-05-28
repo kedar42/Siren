@@ -1,4 +1,5 @@
 import unittest
+import warnings
 
 from siren.bot import SirenBot
 from siren.config import Settings
@@ -28,7 +29,9 @@ class BotSetupTests(unittest.IsolatedAsyncioTestCase):
             spotify_client_id="spotify-id",
             spotify_client_secret="spotify-secret",
         )
-        bot = SirenBot(settings, resolver=object())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            bot = SirenBot(settings, resolver=object())
         tree = FakeTree()
         bot._BotBase__tree = tree
 
@@ -45,7 +48,9 @@ class BotSetupTests(unittest.IsolatedAsyncioTestCase):
             spotify_client_id="spotify-id",
             spotify_client_secret="spotify-secret",
         )
-        bot = SirenBot(settings, resolver=object())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            bot = SirenBot(settings, resolver=object())
         tree = FakeTree()
         bot._BotBase__tree = tree
 

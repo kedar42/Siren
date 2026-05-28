@@ -226,9 +226,15 @@ class GuildPlayer:
                 resolved = await self.youtube.resolve_url(track.webpage_url)
             except Exception as exc:
                 log.exception("[stream %s] extraction failed: %s", self.tag, exc)
+                if self._voice_changed_during_prepare(voice):
+                    self._abort_stale_prepare()
+                    return
                 continue
             if not resolved:
                 log.warning("[stream %s] extract returned nothing; skipping track", self.tag)
+                if self._voice_changed_during_prepare(voice):
+                    self._abort_stale_prepare()
+                    return
                 continue
             if self._voice_changed_during_prepare(voice):
                 self._abort_stale_prepare()
@@ -245,6 +251,9 @@ class GuildPlayer:
                 )
             except Exception as exc:
                 log.exception("[ffmpeg %s] source construction failed: %s", self.tag, exc)
+                if self._voice_changed_during_prepare(voice):
+                    self._abort_stale_prepare()
+                    return
                 continue
             if self._voice_changed_during_prepare(voice):
                 self._abort_stale_prepare()
@@ -258,6 +267,9 @@ class GuildPlayer:
                 self._start_timing()
             except discord.ClientException as exc:
                 log.error("[ffmpeg %s] play() rejected: %s", self.tag, exc)
+                if self._voice_changed_during_prepare(voice):
+                    self._abort_stale_prepare()
+                    return
                 continue
             self.reconcile_idle()
             return

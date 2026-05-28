@@ -22,8 +22,12 @@ class FakeTree:
 
 
 class FakeVoice:
-    def __init__(self, channel) -> None:
+    def __init__(self, channel, *, connected=True) -> None:
         self.channel = channel
+        self.connected = connected
+
+    def is_connected(self) -> bool:
+        return self.connected
 
 
 class FakePlayer:
@@ -110,6 +114,24 @@ class BotVoiceStateTests(unittest.IsolatedAsyncioTestCase):
         guild = type("Guild", (), {"id": 123})()
         member = type("Member", (), {"id": 42, "guild": guild})()
         before = type("VoiceState", (), {"channel": disconnected_channel})()
+        after = type("VoiceState", (), {"channel": None})()
+
+        await bot.on_voice_state_update(member, before, after)
+
+        self.assertEqual(player.clear_calls, [])
+        self.assertIs(player.voice, fresh_voice)
+
+    async def test_bot_self_disconnect_does_not_clear_connected_fresh_voice_in_same_channel(self) -> None:
+        bot = make_bot()
+        bot._connection.user = type("User", (), {"id": 42})()
+        channel = object()
+        fresh_voice = FakeVoice(channel, connected=True)
+        player = FakePlayer(fresh_voice)
+        bot.attach_players(FakePlayers(player))
+
+        guild = type("Guild", (), {"id": 123})()
+        member = type("Member", (), {"id": 42, "guild": guild})()
+        before = type("VoiceState", (), {"channel": channel})()
         after = type("VoiceState", (), {"channel": None})()
 
         await bot.on_voice_state_update(member, before, after)

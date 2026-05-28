@@ -3,6 +3,8 @@ import unittest
 import warnings
 from unittest.mock import patch
 
+import discord
+
 from siren.bot import SirenBot
 from siren.config import Settings
 from siren.models import Track
@@ -55,6 +57,16 @@ class FakeVoice:
         self.playing = False
 
 
+class PlayRejectingVoice(FakeVoice):
+    def __init__(self, on_play) -> None:
+        super().__init__()
+        self._on_play = on_play
+
+    def play(self, source, after=None) -> None:
+        self._on_play()
+        raise discord.ClientException("already playing")
+
+
 class SequencedYouTube:
     def __init__(self, outcomes) -> None:
         self.outcomes = list(outcomes)
@@ -80,6 +92,26 @@ class BlockingYouTube:
         self.started.set()
         await self.release.wait()
         return self.outcome, f"stream-{url}"
+
+
+class BlockingSequencedYouTube:
+    def __init__(self, outcomes) -> None:
+        self.outcomes = list(outcomes)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.urls = []
+
+    async def resolve_url(self, url: str):
+        self.urls.append(url)
+        if len(self.urls) == 1:
+            self.started.set()
+            await self.release.wait()
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        if outcome is None:
+            return None
+        return outcome, f"stream-{url}"
 
 
 def settings() -> Settings:
@@ -179,6 +211,7 @@ class PlaybackReliabilityTests(unittest.IsolatedAsyncioTestCase):
             member = type("Member", (), {"id": 42, "guild": guild})()
             before = type("VoiceState", (), {"channel": voice.channel})()
             after = type("VoiceState", (), {"channel": None})()
+            voice.connected = False
 
             await bot.on_voice_state_update(member, before, after)
 
@@ -215,6 +248,62 @@ class PlaybackReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(player.voice)
         self.assertIsNone(player.current)
         self.assertIsNone(player.current_elapsed_ms())
+
+    async def test_stale_extraction_failure_does_not_start_next_track_on_reconnected_voice(self) -> None:
+        youtube = BlockingSequencedYouTube([RuntimeError("yt-dlp failed"), track(2)])
+        old_voice = FakeVoice()
+        new_voice = FakeVoice()
+        player = GuildPlayer(FakeBot(), 123, youtube, settings())
+        player.voice = old_voice
+        next_track = track(2)
+        player.queue.extend([track(1), next_track])
+
+        with (
+            patch("siren.player.discord.FFmpegOpusAudio.from_probe", return_value=object()),
+            patch("siren.player.log.exception"),
+        ):
+            play_task = asyncio.create_task(player.play_next())
+            await youtube.started.wait()
+            cleanup_task = asyncio.create_task(self._clear_voice_state(player, old_voice))
+            await asyncio.sleep(0)
+            player.voice = new_voice
+            youtube.release.set()
+            await play_task
+            await cleanup_task
+
+        self.assertEqual(old_voice.play_calls, 0)
+        self.assertEqual(new_voice.play_calls, 0)
+        self.assertIs(player.voice, new_voice)
+        self.assertIsNone(player.current)
+        self.assertEqual(list(player.queue), [next_track])
+
+    async def test_stale_extraction_no_result_does_not_start_next_track_on_reconnected_voice(self) -> None:
+        youtube = BlockingSequencedYouTube([None, track(2)])
+        old_voice = FakeVoice()
+        new_voice = FakeVoice()
+        player = GuildPlayer(FakeBot(), 123, youtube, settings())
+        player.voice = old_voice
+        next_track = track(2)
+        player.queue.extend([track(1), next_track])
+
+        with (
+            patch("siren.player.discord.FFmpegOpusAudio.from_probe", return_value=object()),
+            patch("siren.player.log.warning"),
+        ):
+            play_task = asyncio.create_task(player.play_next())
+            await youtube.started.wait()
+            cleanup_task = asyncio.create_task(self._clear_voice_state(player, old_voice))
+            await asyncio.sleep(0)
+            player.voice = new_voice
+            youtube.release.set()
+            await play_task
+            await cleanup_task
+
+        self.assertEqual(old_voice.play_calls, 0)
+        self.assertEqual(new_voice.play_calls, 0)
+        self.assertIs(player.voice, new_voice)
+        self.assertIsNone(player.current)
+        self.assertEqual(list(player.queue), [next_track])
 
     async def test_clear_voice_state_for_old_voice_does_not_clear_reconnected_voice(self) -> None:
         youtube = BlockingYouTube(track(1))
@@ -267,6 +356,62 @@ class PlaybackReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(player.voice)
         self.assertIsNone(player.current)
         self.assertIsNone(player.current_elapsed_ms())
+
+    async def test_stale_ffmpeg_failure_does_not_start_next_track_on_reconnected_voice(self) -> None:
+        old_voice = FakeVoice()
+        new_voice = FakeVoice()
+        probe_started = asyncio.Event()
+        release_probe = asyncio.Event()
+
+        async def from_probe(*args, **kwargs):
+            probe_started.set()
+            await release_probe.wait()
+            raise RuntimeError("probe failed")
+
+        player = GuildPlayer(FakeBot(), 123, SequencedYouTube([track(1), track(2)]), settings())
+        player.voice = old_voice
+        next_track = track(2)
+        player.queue.extend([track(1), next_track])
+
+        with (
+            patch("siren.player.discord.FFmpegOpusAudio.from_probe", side_effect=from_probe),
+            patch("siren.player.log.exception"),
+        ):
+            play_task = asyncio.create_task(player.play_next())
+            await probe_started.wait()
+            cleanup_task = asyncio.create_task(self._clear_voice_state(player, old_voice))
+            await asyncio.sleep(0)
+            player.voice = new_voice
+            release_probe.set()
+            await play_task
+            await cleanup_task
+
+        self.assertEqual(old_voice.play_calls, 0)
+        self.assertEqual(new_voice.play_calls, 0)
+        self.assertIs(player.voice, new_voice)
+        self.assertIsNone(player.current)
+        self.assertEqual(list(player.queue), [next_track])
+
+    async def test_stale_play_rejection_does_not_start_next_track_on_reconnected_voice(self) -> None:
+        new_voice = FakeVoice()
+        player = GuildPlayer(FakeBot(), 123, SequencedYouTube([track(1), track(2)]), settings())
+
+        def reconnect_during_rejection() -> None:
+            player.voice = new_voice
+
+        old_voice = PlayRejectingVoice(reconnect_during_rejection)
+        player.voice = old_voice
+        next_track = track(2)
+        player.queue.extend([track(1), next_track])
+
+        with patch("siren.player.discord.FFmpegOpusAudio.from_probe", return_value=object()):
+            await player.play_next()
+
+        self.assertEqual(old_voice.play_calls, 0)
+        self.assertEqual(new_voice.play_calls, 0)
+        self.assertIs(player.voice, new_voice)
+        self.assertIsNone(player.current)
+        self.assertEqual(list(player.queue), [next_track])
 
 
 if __name__ == "__main__":

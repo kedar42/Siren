@@ -54,7 +54,7 @@ class SirenBot(commands.Bot):
                     if (
                         disconnected_voice is not None
                         and disconnected_voice.channel == before.channel
-                        and not disconnected_voice.is_connected()
+                        and (not disconnected_voice.is_connected() or player.current is not None)
                     ):
                         await player.clear_voice_state(disconnected_voice)
             return

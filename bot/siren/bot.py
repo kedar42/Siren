@@ -58,7 +58,7 @@ class SirenBot(commands.Bot):
                     should_clear = session_matches or (
                         not has_session_identity
                         and disconnected_voice is not None
-                        and (not disconnected_voice.is_connected() or player.current is not None)
+                        and not disconnected_voice.is_connected()
                     )
                     if (
                         disconnected_voice is not None

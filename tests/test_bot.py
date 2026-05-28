@@ -142,6 +142,26 @@ class BotVoiceStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(player.clear_calls, [])
         self.assertIs(player.voice, fresh_voice)
 
+    async def test_bot_self_disconnect_does_not_clear_active_connected_fresh_voice_without_sessions(self) -> None:
+        bot = make_bot()
+        bot._connection.user = type("User", (), {"id": 42})()
+        channel = object()
+        fresh_voice = FakeVoice(channel, connected=True)
+        current_track = object()
+        player = FakePlayer(fresh_voice, current=current_track)
+        bot.attach_players(FakePlayers(player))
+
+        guild = type("Guild", (), {"id": 123})()
+        member = type("Member", (), {"id": 42, "guild": guild})()
+        before = type("VoiceState", (), {"channel": channel})()
+        after = type("VoiceState", (), {"channel": None})()
+
+        await bot.on_voice_state_update(member, before, after)
+
+        self.assertEqual(player.clear_calls, [])
+        self.assertIs(player.voice, fresh_voice)
+        self.assertIs(player.current, current_track)
+
     async def test_bot_self_disconnect_clears_active_voice_even_if_is_connected_lags(self) -> None:
         bot = make_bot()
         bot._connection.user = type("User", (), {"id": 42})()

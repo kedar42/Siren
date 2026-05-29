@@ -130,6 +130,39 @@ class YouTubeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tracks[-1].title, "Track 49")
         self.assertTrue(tracks.truncated)
 
+    async def test_tracks_from_playlist_url_continues_after_malformed_entries_to_fill_usable_cap(self) -> None:
+        entries: list[dict[str, object] | None] = [
+            {"title": "Missing URL", "uploader": "Artist", "duration": 100},
+            None,
+            *[
+                {"title": f"Track {index}", "uploader": "Artist", "duration": 100, "url": f"id-{index}"}
+                for index in range(51)
+            ],
+        ]
+
+        class PagedPlaylistYoutubeDL(FakeYoutubeDL):
+            page_ranges: list[tuple[int, int]] = []
+
+            def __init__(self, options: dict[str, object]) -> None:
+                super().__init__(options)
+                self.start = int(options["playliststart"])
+                self.end = int(options["playlistend"])
+                PagedPlaylistYoutubeDL.page_ranges.append((self.start, self.end))
+
+            def extract_info(self, target: str, download: bool) -> dict[str, object]:
+                return {"entries": entries[self.start - 1 : self.end]}
+
+        service = YouTubeService(settings(), ydl_cls=PagedPlaylistYoutubeDL)
+
+        tracks = await service.tracks_from_playlist_url("https://youtube.com/playlist?list=abc")
+
+        self.assertEqual(len(tracks), 50)
+        self.assertEqual(tracks[0].title, "Track 0")
+        self.assertEqual(tracks[-1].title, "Track 49")
+        self.assertEqual(tracks.skipped, 2)
+        self.assertTrue(tracks.truncated)
+        self.assertEqual(PagedPlaylistYoutubeDL.page_ranges, [(1, 51), (52, 53)])
+
     async def test_search_returns_tracks_from_flat_entries(self) -> None:
         service = YouTubeService(settings(), ydl_cls=FakeYoutubeDL)
         tracks = await service.search("artist song", limit=3)

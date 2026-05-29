@@ -71,28 +71,39 @@ class YouTubeService:
         tracks = YouTubeTrackList()
         if not is_youtube_playlist_url(url):
             return tracks
-        options = {
-            **self._settings.ytdl_search_options,
-            "noplaylist": False,
-            "extract_flat": "in_playlist",
-            "playlistend": limit + 1,
-        }
-        try:
-            with self._ydl_cls(options) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except yt_dlp.utils.DownloadError as exc:
-            log.warning("[resolve] yt playlist %r failed: %s", url, exc)
-            return tracks
+        next_index = 1
+        while True:
+            remaining = max(limit - len(tracks), 0)
+            batch_size = remaining + 1 if remaining else 1
+            options = {
+                **self._settings.ytdl_search_options,
+                "noplaylist": False,
+                "extract_flat": "in_playlist",
+                "playliststart": next_index,
+                "playlistend": next_index + batch_size - 1,
+            }
+            try:
+                with self._ydl_cls(options) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            except yt_dlp.utils.DownloadError as exc:
+                log.warning("[resolve] yt playlist %r failed: %s", url, exc)
+                return tracks
 
-        for entry in (info or {}).get("entries") or []:
-            track = self._entry_to_track(entry)
-            if track is None:
-                tracks.skipped += 1
-                continue
-            if len(tracks) >= limit:
-                tracks.truncated = True
-                break
-            tracks.append(track)
+            entries = (info or {}).get("entries") or []
+            if not entries:
+                return tracks
+            for entry in entries:
+                track = self._entry_to_track(entry)
+                if track is None:
+                    tracks.skipped += 1
+                    continue
+                if len(tracks) >= limit:
+                    tracks.truncated = True
+                    return tracks
+                tracks.append(track)
+            next_index += len(entries)
+            if len(entries) < batch_size:
+                return tracks
         return tracks
 
     def _resolve_url_sync(self, url: str) -> tuple[Track, str] | None:

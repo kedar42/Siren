@@ -58,13 +58,18 @@ class YouTubeServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(is_youtube_playlist_url("http://youtube.com/playlist?list=OLAK5uy_example"))
         self.assertTrue(is_youtube_playlist_url("https://www.youtube.com/watch?v=abc123&list=OLAK5uy_example"))
+        self.assertTrue(is_youtube_playlist_url("youtube.com/watch?v=abc123&list=OLAK5uy_example"))
+        self.assertTrue(is_youtube_playlist_url("music.youtube.com/playlist?list=OLAK5uy_example"))
         self.assertTrue(is_youtube_playlist_url("https://music.youtube.com/playlist?list=OLAK5uy_example"))
         self.assertFalse(is_youtube_playlist_url("https://www.youtube.com/watch?v=abc123"))
         self.assertFalse(is_youtube_playlist_url("https://soundcloud.com/artist/playlist?list=abc"))
 
     async def test_tracks_from_playlist_url_converts_flat_entries_in_order(self) -> None:
         class PlaylistYoutubeDL(FakeYoutubeDL):
+            targets: list[str] = []
+
             def extract_info(self, target: str, download: bool) -> dict[str, object]:
+                self.targets.append(target)
                 return {
                     "entries": [
                         {"title": "First", "uploader": "Artist", "duration": 100, "url": "first-id"},
@@ -79,13 +84,14 @@ class YouTubeServiceTests(unittest.IsolatedAsyncioTestCase):
 
         service = YouTubeService(settings(), ydl_cls=PlaylistYoutubeDL)
 
-        tracks = await service.tracks_from_playlist_url("https://youtube.com/playlist?list=abc")
+        tracks = await service.tracks_from_playlist_url("youtube.com/playlist?list=abc")
 
         self.assertEqual([track.title for track in tracks], ["First", "Second"])
         self.assertEqual([track.author for track in tracks], ["Artist", "Channel"])
         self.assertEqual([track.duration_ms for track in tracks], [100000, 120000])
         self.assertEqual(tracks[0].webpage_url, "https://www.youtube.com/watch?v=first-id")
         self.assertEqual(tracks[1].webpage_url, "https://youtube.test/watch?v=second")
+        self.assertEqual(PlaylistYoutubeDL.targets, ["https://youtube.com/playlist?list=abc"])
         self.assertFalse(tracks.truncated)
         self.assertEqual(tracks.skipped, 0)
         self.assertFalse(FakeYoutubeDL.calls[-1]["noplaylist"])

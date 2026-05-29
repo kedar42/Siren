@@ -24,13 +24,21 @@ class YouTubeTrackList(list[Track]):
 
 
 def is_youtube_playlist_url(value: str) -> bool:
-    parsed = urlparse(value.strip())
+    parsed = urlparse(_with_default_scheme(value))
     if parsed.scheme.lower() not in {"http", "https"}:
         return False
     host = parsed.netloc.lower().split(":", 1)[0]
     if host not in YOUTUBE_HOSTS:
         return False
     return bool((parse_qs(parsed.query).get("list") or [""])[0])
+
+
+def _with_default_scheme(value: str) -> str:
+    candidate = value.strip()
+    parsed = urlparse(candidate)
+    if not parsed.scheme and not parsed.netloc:
+        return f"https://{candidate}"
+    return candidate
 
 
 class YouTubeService:
@@ -69,6 +77,7 @@ class YouTubeService:
 
     def _playlist_tracks_sync(self, url: str, limit: int = MAX_YOUTUBE_PLAYLIST_TRACKS) -> YouTubeTrackList:
         tracks = YouTubeTrackList()
+        url = _with_default_scheme(url)
         if not is_youtube_playlist_url(url):
             return tracks
         next_index = 1

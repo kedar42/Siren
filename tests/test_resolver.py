@@ -85,6 +85,24 @@ class MappingYouTube:
         return Track("Resolved", "Uploader", 100000, url), "https://stream.test/audio"
 
 
+class PlaylistYouTube(FakeYouTube):
+    def __init__(self, playlist_tracks: list[Track], *, truncated: bool = False, skipped: int = 0) -> None:
+        super().__init__([])
+        from siren.youtube import YouTubeTrackList
+
+        self.playlist_tracks = YouTubeTrackList(playlist_tracks, truncated=truncated, skipped=skipped)
+        self.playlist_urls: list[str] = []
+        self.resolved_urls: list[str] = []
+
+    async def tracks_from_playlist_url(self, url: str):
+        self.playlist_urls.append(url)
+        return self.playlist_tracks
+
+    async def resolve_url(self, url: str):
+        self.resolved_urls.append(url)
+        return await super().resolve_url(url)
+
+
 class SlowMappingYouTube(MappingYouTube):
     def __init__(self, candidates_by_query: dict[str, list[Track]], *, delay_seconds: float = 0.05) -> None:
         super().__init__(candidates_by_query)
@@ -107,6 +125,54 @@ ANCHOR = Track("Never Gonna Give You Up", "Rick Astley", 213000, "spotify", "GBA
 
 
 class ResolverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_youtube_playlist_url_returns_multi_track_result(self) -> None:
+        tracks = [Track("First", "Artist", 100000, "first-url"), Track("Second", "Artist", 110000, "second-url")]
+        youtube = PlaylistYouTube(tracks)
+        resolver = TrackResolver(FakeSpotify(anchor=None), youtube)
+
+        result = await resolver.resolve("https://youtube.com/playlist?list=abc")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.all_tracks, tracks)
+        self.assertEqual(result.track, tracks[0])
+        self.assertEqual(result.message, "Queued 2 tracks.")
+        self.assertEqual(youtube.playlist_urls, ["https://youtube.com/playlist?list=abc"])
+        self.assertEqual(youtube.resolved_urls, [])
+
+    async def test_youtube_playlist_summary_reports_cap_and_skipped_entries(self) -> None:
+        tracks = [Track(f"Track {index}", "Artist", 100000, f"url-{index}") for index in range(50)]
+        resolver = TrackResolver(FakeSpotify(anchor=None), PlaylistYouTube(tracks, truncated=True, skipped=2))
+
+        result = await resolver.resolve("https://music.youtube.com/playlist?list=abc")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(result.all_tracks), 50)
+        self.assertEqual(
+            result.message,
+            "Queued 50 tracks. Playlist limited to first 50 tracks. Skipped 2 tracks that couldn't be resolved.",
+        )
+
+    async def test_youtube_playlist_with_no_tracks_returns_clear_result(self) -> None:
+        resolver = TrackResolver(FakeSpotify(anchor=None), PlaylistYouTube([]))
+
+        result = await resolver.resolve("https://youtube.com/playlist?list=abc")
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.all_tracks, [])
+        self.assertIn("Couldn't resolve", result.message)
+
+    async def test_youtube_direct_video_without_list_stays_single_track_url_resolution(self) -> None:
+        youtube = PlaylistYouTube([Track("Playlist", "Artist", 100000, "playlist-url")])
+        resolver = TrackResolver(FakeSpotify(anchor=None), youtube)
+
+        result = await resolver.resolve("https://www.youtube.com/watch?v=abc123")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.track.webpage_url if result.track else None, "https://www.youtube.com/watch?v=abc123")
+        self.assertEqual(result.all_tracks, [result.track])
+        self.assertEqual(youtube.playlist_urls, [])
+        self.assertEqual(youtube.resolved_urls, ["https://www.youtube.com/watch?v=abc123"])
+
     async def test_spotify_album_with_no_tracks_returns_clear_result(self) -> None:
         resolver = TrackResolver(FakeSpotify(anchors=[]), FakeYouTube([]))
         result = await resolver.resolve("https://open.spotify.com/album/abc123")

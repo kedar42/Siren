@@ -9,7 +9,7 @@ from rapidfuzz import fuzz
 
 from .models import Track
 from .spotify import MAX_PLAYLIST_TRACKS, SpotifyService, SpotifyUrlKind, UnsupportedSpotifyUrl
-from .youtube import YouTubeService
+from .youtube import MAX_YOUTUBE_PLAYLIST_TRACKS, YouTubeService, is_youtube_playlist_url
 
 log = logging.getLogger("siren")
 
@@ -100,6 +100,20 @@ class TrackResolver:
                 return await self._resolve_anchored(anchors[0], query)
             at_playlist_cap = spotify_url.kind is SpotifyUrlKind.PLAYLIST and bool(getattr(anchors, "truncated", False))
             return await self._resolve_anchors(anchors, query, at_playlist_cap=at_playlist_cap)
+
+        if is_youtube_playlist_url(query):
+            log.info("[resolve] youtube playlist URL -> yt-dlp flat playlist")
+            tracks = await self.youtube.tracks_from_playlist_url(query)
+            if not tracks:
+                log.warning("[resolve] youtube playlist URL did not resolve: %s", query)
+                return ResolveResult(message=f"Couldn't resolve `{query}`.")
+            message = f"Queued {len(tracks)} {'track' if len(tracks) == 1 else 'tracks'}."
+            if getattr(tracks, "truncated", False):
+                message += f" Playlist limited to first {MAX_YOUTUBE_PLAYLIST_TRACKS} tracks."
+            skipped = int(getattr(tracks, "skipped", 0) or 0)
+            if skipped:
+                message += f" Skipped {skipped} {'track' if skipped == 1 else 'tracks'} that couldn't be resolved."
+            return ResolveResult(track=tracks[0], tracks=list(tracks), message=message)
 
         if is_url(query):
             log.info("[resolve] direct URL -> yt-dlp")

@@ -75,6 +75,7 @@ class YouTubeService:
             **self._settings.ytdl_search_options,
             "noplaylist": False,
             "extract_flat": "in_playlist",
+            "playlistend": limit + 1,
         }
         try:
             with self._ydl_cls(options) as ydl:

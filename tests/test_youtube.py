@@ -90,6 +90,7 @@ class YouTubeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tracks.skipped, 0)
         self.assertFalse(FakeYoutubeDL.calls[-1]["noplaylist"])
         self.assertEqual(FakeYoutubeDL.calls[-1]["extract_flat"], "in_playlist")
+        self.assertEqual(FakeYoutubeDL.calls[-1]["playlistend"], 51)
 
     async def test_tracks_from_playlist_url_skips_malformed_entries(self) -> None:
         class MalformedPlaylistYoutubeDL(FakeYoutubeDL):

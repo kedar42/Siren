@@ -45,6 +45,13 @@ class ExpandedTracks(list[Track]):
         self.truncated = truncated
 
 
+class AlbumTracks(list[Track]):
+    def __init__(self, tracks: list[Track], *, album_name: str = "", album_artist: str = "") -> None:
+        super().__init__(tracks)
+        self.album_name = album_name
+        self.album_artist = album_artist
+
+
 class SlowSpotify(FakeSpotify):
     def __init__(self, anchor: Track | None = None, *, delay_seconds: float = 0.2) -> None:
         super().__init__(anchor=anchor)
@@ -119,6 +126,37 @@ class SlowMappingYouTube(MappingYouTube):
             return self.candidates_by_query.get(query, [])
         finally:
             self.active_searches -= 1
+
+
+class AlbumMatchingYouTube:
+    def __init__(
+        self,
+        *,
+        album_url: str | None = None,
+        album_tracks: list[Track] | None = None,
+        search_results: dict[str, list[Track]] | None = None,
+    ) -> None:
+        self.album_url = album_url
+        self.album_tracks = album_tracks or []
+        self.search_results = search_results or {}
+        self.find_album_calls: list[str] = []
+        self.playlist_urls: list[str] = []
+        self.searches: list[str] = []
+
+    async def find_album_url(self, query: str) -> str | None:
+        self.find_album_calls.append(query)
+        return self.album_url
+
+    async def tracks_from_playlist_url(self, url: str) -> list[Track]:
+        self.playlist_urls.append(url)
+        return self.album_tracks
+
+    async def search(self, query: str, limit: int = 5) -> list[Track]:
+        self.searches.append(query)
+        return self.search_results.get(query, [])
+
+    async def resolve_url(self, url: str):
+        return Track("Resolved", "Uploader", 100000, url), "https://stream.test/audio"
 
 
 ANCHOR = Track("Never Gonna Give You Up", "Rick Astley", 213000, "spotify", "GBARL9300135")
@@ -292,6 +330,108 @@ class ResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([track.webpage_url for track in result.all_tracks], ["youtube-a", "youtube-b"])
         self.assertEqual(result.track.webpage_url if result.track else None, "youtube-a")
         self.assertEqual(result.message, "Queued 2 tracks.")
+
+    async def test_spotify_album_matches_full_youtube_album_and_skips_per_track_search(self) -> None:
+        anchors = AlbumTracks(
+            [
+                Track("Song A", "Artist", 100000, "spotify-a", "ISRC-A"),
+                Track("Song B", "Artist", 110000, "spotify-b", "ISRC-B"),
+            ],
+            album_name="Great Album",
+            album_artist="Artist",
+        )
+        youtube = AlbumMatchingYouTube(
+            album_url="https://music.youtube.com/browse/MPREb_example",
+            album_tracks=[
+                Track("Song A", "Artist", 100000, "youtube-a"),
+                Track("Song B", "Artist", 110000, "youtube-b"),
+            ],
+        )
+        resolver = TrackResolver(FakeSpotify(anchors=anchors), youtube)
+
+        result = await resolver.resolve("https://open.spotify.com/album/album123")
+
+        self.assertTrue(result.ok)
+        self.assertEqual([track.webpage_url for track in result.all_tracks], ["youtube-a", "youtube-b"])
+        self.assertEqual(result.message, "Queued 2 tracks from the matching YouTube album.")
+        self.assertEqual(youtube.find_album_calls, ["Artist Great Album"])
+        self.assertEqual(youtube.playlist_urls, ["https://music.youtube.com/browse/MPREb_example"])
+        self.assertEqual(youtube.searches, [])
+        self.assertEqual([track.isrc for track in result.all_tracks], ["ISRC-A", "ISRC-B"])
+
+    async def test_spotify_album_falls_back_to_per_track_search_when_no_youtube_album_found(self) -> None:
+        anchors = AlbumTracks(
+            [Track("Song A", "Artist", 100000, "spotify-a"), Track("Song B", "Artist", 110000, "spotify-b")],
+            album_name="Great Album",
+            album_artist="Artist",
+        )
+        youtube = AlbumMatchingYouTube(
+            album_url=None,
+            search_results={
+                "Artist - Song A": [Track("Song A", "Artist", 100000, "youtube-a")],
+                "Artist - Song B": [Track("Song B", "Artist", 110000, "youtube-b")],
+            },
+        )
+        resolver = TrackResolver(FakeSpotify(anchors=anchors), youtube)
+
+        result = await resolver.resolve("https://open.spotify.com/album/album123")
+
+        self.assertTrue(result.ok)
+        self.assertEqual([track.webpage_url for track in result.all_tracks], ["youtube-a", "youtube-b"])
+        self.assertEqual(result.message, "Queued 2 tracks.")
+        self.assertEqual(youtube.find_album_calls, ["Artist Great Album"])
+
+    async def test_spotify_album_falls_back_when_youtube_album_tracklist_barely_matches(self) -> None:
+        anchors = AlbumTracks(
+            [
+                Track("Song A", "Artist", 100000, "spotify-a"),
+                Track("Song B", "Artist", 110000, "spotify-b"),
+            ],
+            album_name="Great Album",
+            album_artist="Artist",
+        )
+        youtube = AlbumMatchingYouTube(
+            album_url="https://music.youtube.com/browse/MPREb_example",
+            album_tracks=[Track("Unrelated", "Someone Else", 999000, "youtube-x")],
+            search_results={
+                "Artist - Song A": [Track("Song A", "Artist", 100000, "youtube-a")],
+                "Artist - Song B": [Track("Song B", "Artist", 110000, "youtube-b")],
+            },
+        )
+        resolver = TrackResolver(FakeSpotify(anchors=anchors), youtube)
+
+        result = await resolver.resolve("https://open.spotify.com/album/album123")
+
+        self.assertEqual([track.webpage_url for track in result.all_tracks], ["youtube-a", "youtube-b"])
+        self.assertEqual(result.message, "Queued 2 tracks.")
+
+    async def test_spotify_album_partial_match_still_prefers_youtube_album_and_reports_skipped(self) -> None:
+        anchors = AlbumTracks(
+            [
+                Track("Song A", "Artist", 100000, "spotify-a"),
+                Track("Song B", "Artist", 110000, "spotify-b"),
+                Track("Bonus Track", "Artist", 120000, "spotify-c"),
+            ],
+            album_name="Great Album",
+            album_artist="Artist",
+        )
+        youtube = AlbumMatchingYouTube(
+            album_url="https://music.youtube.com/browse/MPREb_example",
+            album_tracks=[
+                Track("Song A", "Artist", 100000, "youtube-a"),
+                Track("Song B", "Artist", 110000, "youtube-b"),
+            ],
+        )
+        resolver = TrackResolver(FakeSpotify(anchors=anchors), youtube)
+
+        result = await resolver.resolve("https://open.spotify.com/album/album123")
+
+        self.assertEqual([track.webpage_url for track in result.all_tracks], ["youtube-a", "youtube-b"])
+        self.assertEqual(
+            result.message,
+            "Queued 2 tracks from the matching YouTube album. Skipped 1 track that couldn't be matched.",
+        )
+        self.assertEqual(youtube.searches, [])
 
     async def test_spotify_playlist_partial_resolution_reports_skipped_count(self) -> None:
         anchors = [Track("Song A", "Artist", 100000, "spotify-a"), Track("Song B", "Artist", 110000, "spotify-b")]

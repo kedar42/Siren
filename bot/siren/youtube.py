@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import yt_dlp
 
@@ -64,6 +64,24 @@ class YouTubeService:
         limit: int = MAX_YOUTUBE_PLAYLIST_TRACKS,
     ) -> YouTubeTrackList:
         return await asyncio.to_thread(self._playlist_tracks_sync, url, limit)
+
+    async def find_album_url(self, query: str) -> str | None:
+        return await asyncio.to_thread(self._find_album_url_sync, query)
+
+    def _find_album_url_sync(self, query: str) -> str | None:
+        options = {**self._settings.ytdl_search_options, "noplaylist": False}
+        search_url = f"https://music.youtube.com/search?q={quote(query)}"
+        try:
+            with self._ydl_cls(options) as ydl:
+                info = ydl.extract_info(search_url, download=False)
+        except yt_dlp.utils.DownloadError as exc:
+            log.warning("[resolve] yt music album search %r failed: %s", query, exc)
+            return None
+        for entry in (info or {}).get("entries") or []:
+            entry_id = str((entry or {}).get("id") or "")
+            if YOUTUBE_ALBUM_BROWSE_ID_RE.match(entry_id):
+                return f"https://music.youtube.com/browse/{entry_id}"
+        return None
 
     def _search_sync(self, query: str, limit: int = 5) -> list[Track]:
         try:

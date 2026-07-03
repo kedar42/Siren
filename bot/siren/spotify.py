@@ -46,6 +46,20 @@ class SpotifyTrackList(list[Track]):
         self.truncated = truncated
 
 
+class SpotifyAlbumTrackList(SpotifyTrackList):
+    def __init__(
+        self,
+        tracks: list[Track] | None = None,
+        *,
+        truncated: bool = False,
+        album_name: str = "",
+        album_artist: str = "",
+    ) -> None:
+        super().__init__(tracks, truncated=truncated)
+        self.album_name = album_name
+        self.album_artist = album_artist
+
+
 class SpotifyService:
     def __init__(self, settings: Settings, client: Any | None = None) -> None:
         self._client = client if client is not None else spotipy.Spotify(
@@ -105,7 +119,16 @@ class SpotifyService:
         return self._track_from_obj(spotify_track) if spotify_track else None
 
     def _album_tracks(self, album_id: str) -> list[Track]:
-        tracks: list[Track] = []
+        tracks = SpotifyAlbumTrackList()
+        try:
+            album = self._client.album(album_id)
+        except Exception as exc:
+            log.warning("[resolve] spotify album metadata lookup failed: %s", exc)
+            album = None
+        if album:
+            tracks.album_name = str(album.get("name") or "")
+            tracks.album_artist = ", ".join(artist["name"] for artist in album.get("artists", [])) or ""
+
         offset = 0
         while True:
             try:

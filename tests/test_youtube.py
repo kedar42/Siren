@@ -1,5 +1,7 @@
 import unittest
 
+import yt_dlp
+
 from siren.config import Settings
 from siren.youtube import YouTubeService
 
@@ -241,6 +243,58 @@ class YouTubeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(track.duration_ms, 124000)
         self.assertEqual(stream_url, "https://audio.valid")
         self.assertEqual(FakeYoutubeDL.calls[-1]["format"], "bestaudio/best")
+
+    async def test_find_album_url_returns_first_album_browse_id_from_search_results(self) -> None:
+        class AlbumSearchYoutubeDL(FakeYoutubeDL):
+            targets: list[str] = []
+
+            def extract_info(self, target: str, download: bool) -> dict[str, object]:
+                self.targets.append(target)
+                return {
+                    "entries": [
+                        {"id": "some-video-id", "ie_key": "Youtube"},
+                        {"id": "UCabc123", "ie_key": "YoutubeTab"},
+                        {"id": "MPREb_matched", "ie_key": "YoutubeTab"},
+                        {"id": "MPREb_other", "ie_key": "YoutubeTab"},
+                    ]
+                }
+
+        service = YouTubeService(settings(), ydl_cls=AlbumSearchYoutubeDL)
+
+        album_url = await service.find_album_url("Daft Punk Discovery")
+
+        self.assertEqual(album_url, "https://music.youtube.com/browse/MPREb_matched")
+        self.assertEqual(
+            AlbumSearchYoutubeDL.targets, ["https://music.youtube.com/search?q=Daft%20Punk%20Discovery"]
+        )
+        self.assertFalse(FakeYoutubeDL.calls[-1]["noplaylist"])
+
+    async def test_find_album_url_returns_none_when_no_album_in_results(self) -> None:
+        class NoAlbumYoutubeDL(FakeYoutubeDL):
+            def extract_info(self, target: str, download: bool) -> dict[str, object]:
+                return {
+                    "entries": [
+                        {"id": "some-video-id", "ie_key": "Youtube"},
+                        {"id": "UCabc123", "ie_key": "YoutubeTab"},
+                    ]
+                }
+
+        service = YouTubeService(settings(), ydl_cls=NoAlbumYoutubeDL)
+
+        album_url = await service.find_album_url("obscure query")
+
+        self.assertIsNone(album_url)
+
+    async def test_find_album_url_returns_none_on_download_error(self) -> None:
+        class FailingYoutubeDL(FakeYoutubeDL):
+            def extract_info(self, target: str, download: bool) -> dict[str, object]:
+                raise yt_dlp.utils.DownloadError("boom")
+
+        service = YouTubeService(settings(), ydl_cls=FailingYoutubeDL)
+
+        album_url = await service.find_album_url("query")
+
+        self.assertIsNone(album_url)
 
     async def test_resolve_url_skips_audio_formats_without_url(self) -> None:
         class MissingUrlAudioYoutubeDL(FakeYoutubeDL):

@@ -98,6 +98,12 @@ class TrackResolver:
             if len(anchors) == 1:
                 self._log_anchor(anchors[0])
                 return await self._resolve_anchored(anchors[0], query)
+
+            if spotify_url.kind is SpotifyUrlKind.ALBUM:
+                album_result = await self._resolve_album_via_youtube(anchors)
+                if album_result is not None:
+                    return album_result
+
             at_playlist_cap = spotify_url.kind is SpotifyUrlKind.PLAYLIST and bool(getattr(anchors, "truncated", False))
             return await self._resolve_anchors(anchors, query, at_playlist_cap=at_playlist_cap)
 
@@ -184,6 +190,63 @@ class TrackResolver:
         log.info("[resolve] picked: %s - %s (score=%.2f, url=%s)", best.author, best.title, best_score, best.webpage_url)
         best.isrc = anchor.isrc
         return ResolveResult(track=best)
+
+    async def _resolve_album_via_youtube(self, anchors: list[Track]) -> ResolveResult | None:
+        album_name = getattr(anchors, "album_name", "")
+        if not album_name:
+            return None
+        album_artist = getattr(anchors, "album_artist", "")
+        search_text = f"{album_artist} {album_name}".strip() if album_artist else album_name
+
+        album_url = await self.youtube.find_album_url(search_text)
+        if not album_url:
+            log.info("[resolve] no youtube album match for %r", search_text)
+            return None
+
+        yt_tracks = await self.youtube.tracks_from_playlist_url(album_url)
+        if not yt_tracks:
+            log.info("[resolve] youtube album %s had no tracks", album_url)
+            return None
+
+        matched, skipped = self._match_album_tracks(anchors, yt_tracks)
+        if not matched or len(matched) * 2 < len(anchors):
+            log.info(
+                "[resolve] youtube album match too weak (%d/%d matched) for %s; falling back to per-track search",
+                len(matched),
+                len(anchors),
+                album_url,
+            )
+            return None
+
+        log.info("[resolve] matched youtube album %s -> %d/%d tracks", album_url, len(matched), len(anchors))
+        message = f"Queued {len(matched)} {'track' if len(matched) == 1 else 'tracks'} from the matching YouTube album."
+        if skipped:
+            message += f" Skipped {skipped} {'track' if skipped == 1 else 'tracks'} that couldn't be matched."
+        return ResolveResult(track=matched[0], tracks=matched, message=message)
+
+    @staticmethod
+    def _match_album_tracks(anchors: list[Track], candidates: list[Track]) -> tuple[list[Track], int]:
+        used: set[int] = set()
+        matched: list[Track] = []
+        skipped = 0
+        for anchor in anchors:
+            best_score = float("-inf")
+            best_index = -1
+            for index, candidate in enumerate(candidates):
+                if index in used:
+                    continue
+                score = score_candidate(candidate, anchor, has_anchor=True)
+                if score > best_score:
+                    best_score = score
+                    best_index = index
+            if best_index == -1 or best_score == float("-inf"):
+                skipped += 1
+                continue
+            used.add(best_index)
+            best = candidates[best_index]
+            best.isrc = anchor.isrc
+            matched.append(best)
+        return matched, skipped
 
     async def _resolve_anchors(
         self,

@@ -70,6 +70,28 @@ class SpotifyExpansionTests(unittest.TestCase):
         self.assertEqual([track.title for track in tracks], ["A0", "A1", "A2"])
         self.assertEqual([call["offset"] for call in client.album_calls], [0, 2])
 
+    def test_album_tracks_captures_album_name_and_artist_metadata(self) -> None:
+        class MetadataAlbumClient(FakeSpotifyClient):
+            def album(self, album_id: str) -> dict[str, object]:
+                return {"name": "Discovery", "artists": [{"name": "Daft Punk"}]}
+
+        service = SpotifyService(settings(), client=MetadataAlbumClient())
+
+        tracks = service.tracks_from_url("https://open.spotify.com/album/album123")
+
+        self.assertEqual(tracks.album_name, "Discovery")
+        self.assertEqual(tracks.album_artist, "Daft Punk")
+
+    def test_album_tracks_metadata_lookup_failure_does_not_break_track_list(self) -> None:
+        client = FakeSpotifyClient()
+        service = SpotifyService(settings(), client=client)
+
+        tracks = service.tracks_from_url("https://open.spotify.com/album/album123")
+
+        self.assertEqual(tracks.album_name, "")
+        self.assertEqual(tracks.album_artist, "")
+        self.assertEqual([track.title for track in tracks], ["A0", "A1", "A2"])
+
     def test_album_tracks_skip_malformed_track_objects(self) -> None:
         class MalformedAlbumClient(FakeSpotifyClient):
             def album_tracks(self, album_id: str, limit: int = 50, offset: int = 0) -> dict[str, object]:

@@ -10,6 +10,7 @@ from .play import PlayCommand
 from .queue import QueueCommand
 from .remove import RemoveCommand
 from .resume import ResumeCommand
+from .seek import SeekCommand
 from .shuffle import ShuffleCommand
 from .skip import SkipCommand
 from .stop import StopCommand
@@ -29,6 +30,7 @@ def register_commands(bot: "SirenBot") -> None:
         RemoveCommand(bot),
         MoveCommand(bot),
         ClearCommand(bot),
+        SeekCommand(bot),
         ShuffleCommand(bot),
         NowPlayingCommand(bot),
     ):

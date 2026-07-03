@@ -48,9 +48,9 @@ class GuildPlayer:
     def tag(self) -> str:
         return f"guild={self.guild_id}"
 
-    def _start_timing(self) -> None:
+    def _start_timing(self, from_ms: int = 0) -> None:
         self._started_at_monotonic = self.clock()
-        self._elapsed_before_pause_ms = 0
+        self._elapsed_before_pause_ms = from_ms
         self._paused_at_monotonic = None
 
     def _clear_timing(self) -> None:
@@ -295,6 +295,70 @@ class GuildPlayer:
             self.current = None
             self._clear_timing()
             self.reconcile_idle()
+
+    async def seek(self, position_ms: int, *, expected_url: str | None = None) -> bool:
+        async with self._transition_lock:
+            is_invalid_state = (
+                not self.current 
+                or not self.voice 
+                or not self.voice.is_connected()
+                or not (self.voice.is_playing() or self.voice.is_paused())
+                or (expected_url is not None and self.current.webpage_url != expected_url)
+                )
+            
+            if is_invalid_state:
+                return False
+
+            track = self.current
+            voice = self.voice
+            if track.duration_ms > 0:
+                position_ms = min(position_ms, track.duration_ms)
+            position_ms = max(0, position_ms)
+            log.info("[player %s] seeking to %dms", self.tag, position_ms)
+
+            try:                                                           
+                resolved = await self.youtube.resolve_url(track.webpage_url)
+            except Exception as exc:
+                log.exception("[player %s] seek failed during URL resolution: %s", self.tag, exc)
+                return False
+            if not resolved:
+                log.warning("[player %s] seek failed: could not re-resolve stream URL", self.tag)
+                return False
+            _track, stream_url = resolved
+
+            if self._voice_changed_during_prepare(voice):
+                return False
+
+            seek_seconds = position_ms / 1000
+            before_options = f"-ss {seek_seconds:.3f} {self.settings.ffmpeg_before_options}"
+            try:
+                source = await discord.FFmpegOpusAudio.from_probe(
+                    stream_url,
+                    method="fallback",
+                    before_options=before_options,
+                    options=self.settings.ffmpeg_options,
+                )
+            except Exception as exc:
+                log.exception("[ffmpeg %s] seek source construction failed: %s", self.tag, exc)
+                return False
+
+            if self._voice_changed_during_prepare(voice):
+                return False
+
+            self._playback_generation += 1
+            generation = self._playback_generation
+            voice.stop()
+
+            try:                                                           
+                voice.play(source, after=lambda error: self._after_play(error, generation))
+            except discord.ClientException as exc:
+                log.error("[ffmpeg %s] seek play() rejected: %s", self.tag, exc)
+                self._clear_timing()
+                return False
+
+            self._start_timing(from_ms=position_ms)                      
+            self.reconcile_idle()
+            return True
 
     async def skip(self) -> None:
         async with self._transition_lock:

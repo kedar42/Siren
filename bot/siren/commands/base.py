@@ -41,6 +41,8 @@ class CommandBase:
 
         channel = interaction.user.voice.channel
         player = self.player_for(guild.id)
+        if (player.voice is None or not player.voice.is_connected()) and guild.voice_client is not None:
+            player.voice = guild.voice_client  # type: ignore[assignment]
         if player.voice is None or not player.voice.is_connected():
             log.info("[voice guild=%s] connecting to channel=%s", guild.id, channel.id)
             try:

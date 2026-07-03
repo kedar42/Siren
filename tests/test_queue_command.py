@@ -2,7 +2,7 @@ import unittest
 from collections import deque
 from datetime import datetime
 
-from siren.commands.queue import format_queue_message
+from siren.commands.queue import format_nowplaying_message, format_queue_message
 from siren.models import Track
 
 
@@ -107,3 +107,19 @@ class QueueCommandTests(unittest.TestCase):
         )
         message = format_queue_message(player, now=datetime(2026, 5, 28, 19, 10, 0))
         self.assertIn("…and 1 more", message)
+
+    def test_format_nowplaying_message_includes_only_current_track(self) -> None:
+        player = FakePlayer()
+        player.queue = deque([Track("Hidden", "Artist", 60_000, "hidden-url")])
+
+        message = format_nowplaying_message(player)
+
+        self.assertEqual(message, "**Now playing:** Artist — Current `[0:45 / 3:05]`")
+
+    def test_format_nowplaying_message_reports_nothing_playing(self) -> None:
+        player = FakePlayer()
+        player.current = None
+
+        message = format_nowplaying_message(player)
+
+        self.assertEqual(message, "Nothing playing.")

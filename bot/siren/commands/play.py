@@ -7,6 +7,7 @@ import discord
 from discord import app_commands
 
 from ..models import Track, fmt_duration
+from ..resolver import ResolveResult
 from .base import CommandBase
 
 log = logging.getLogger("siren")
@@ -59,6 +60,16 @@ async def autocomplete_tracks(
         return []
 
 
+async def enqueue_resolved_tracks(player: object, result: ResolveResult) -> str:
+    tracks = result.all_tracks
+    for track in tracks:
+        await player.enqueue(track)
+    if len(tracks) == 1 and not result.message:
+        track = tracks[0]
+        return f"Queued **{track.title}** by *{track.author}*."
+    return result.message or f"Queued {len(tracks)} tracks."
+
+
 class PlayCommand(CommandBase):
     def register(self) -> None:
         @self.bot.tree.command(name="play", description="Play a song. URL or 'artist - title'.")
@@ -77,9 +88,7 @@ class PlayCommand(CommandBase):
                 if not result.ok:
                     await interaction.followup.send(result.message or f"Couldn't resolve `{query}`.")
                     return
-                assert result.track is not None
-                await player.enqueue(result.track)
-                await interaction.followup.send(f"Queued **{result.track.title}** by *{result.track.author}*.")
+                await interaction.followup.send(await enqueue_resolved_tracks(player, result))
 
     async def autocomplete_query(
         self,

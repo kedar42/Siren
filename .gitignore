@@ -23,6 +23,10 @@ venv/
 bot/data/
 *cookies*.txt
 
+# Local git worktrees
+.worktrees/
+worktrees/
+
 # OS/editor noise
 .DS_Store
 *.swp

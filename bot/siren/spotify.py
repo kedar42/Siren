@@ -37,6 +37,13 @@ class UnsupportedSpotifyUrl(ValueError):
 SPOTIFY_URL_RE = re.compile(
     r"https?://open\.spotify\.com/(?:intl-[a-z]+/)?(track|album|playlist)/([A-Za-z0-9]+)"
 )
+MAX_PLAYLIST_TRACKS = 50
+
+
+class SpotifyTrackList(list[Track]):
+    def __init__(self, tracks: list[Track] | None = None, *, truncated: bool = False) -> None:
+        super().__init__(tracks or [])
+        self.truncated = truncated
 
 
 class SpotifyService:
@@ -67,6 +74,19 @@ class SpotifyService:
             raise UnsupportedSpotifyUrl(parsed.kind)
         return self._track_lookup(parsed.url)
 
+    def tracks_from_url(self, url: str, *, playlist_limit: int = MAX_PLAYLIST_TRACKS) -> list[Track]:
+        parsed = self.parse_url(url)
+        if parsed is None:
+            return []
+        if parsed.kind is SpotifyUrlKind.TRACK:
+            track = self._track_lookup(parsed.url)
+            return [track] if track else []
+        if parsed.kind is SpotifyUrlKind.ALBUM:
+            return self._album_tracks(parsed.spotify_id)
+        if parsed.kind is SpotifyUrlKind.PLAYLIST:
+            return self._playlist_tracks(parsed.spotify_id, playlist_limit=playlist_limit)
+        return []
+
     def search_track(self, query: str) -> Track | None:
         try:
             response = self._client.search(q=query, type="track", limit=1)
@@ -83,6 +103,63 @@ class SpotifyService:
             log.warning("[resolve] spotify track lookup failed: %s", exc)
             return None
         return self._track_from_obj(spotify_track) if spotify_track else None
+
+    def _album_tracks(self, album_id: str) -> list[Track]:
+        tracks: list[Track] = []
+        offset = 0
+        while True:
+            try:
+                response = self._client.album_tracks(album_id, limit=50, offset=offset)
+            except Exception as exc:
+                log.warning("[resolve] spotify album lookup failed: %s", exc)
+                return tracks
+            items = (response or {}).get("items", [])
+            for item in items:
+                if not item:
+                    continue
+                track = self._try_track_from_obj(item)
+                if track is not None:
+                    tracks.append(track)
+            if not (response or {}).get("next") or not items:
+                return tracks
+            offset += len(items)
+
+    def _playlist_tracks(self, playlist_id: str, *, playlist_limit: int) -> list[Track]:
+        tracks = SpotifyTrackList()
+        offset = 0
+        while len(tracks) < playlist_limit:
+            try:
+                response = self._client.playlist_items(
+                    playlist_id,
+                    limit=min(50, playlist_limit - len(tracks)),
+                    offset=offset,
+                    additional_types=("track",),
+                )
+            except Exception as exc:
+                log.warning("[resolve] spotify playlist lookup failed: %s", exc)
+                return tracks
+            items = (response or {}).get("items", [])
+            for index, item in enumerate(items):
+                spotify_track = (item or {}).get("track")
+                if spotify_track:
+                    track = self._try_track_from_obj(spotify_track)
+                    if track is None:
+                        continue
+                    tracks.append(track)
+                    if len(tracks) >= playlist_limit:
+                        tracks.truncated = bool((response or {}).get("next")) or index < len(items) - 1
+                        return tracks
+            if not (response or {}).get("next") or not items:
+                return tracks
+            offset += len(items)
+        return tracks
+
+    def _try_track_from_obj(self, spotify_track: dict[str, Any]) -> Track | None:
+        try:
+            return self._track_from_obj(spotify_track)
+        except (KeyError, TypeError, ValueError) as exc:
+            log.warning("[resolve] skipping malformed spotify track: %s", exc)
+            return None
 
     @staticmethod
     def _track_from_obj(spotify_track: dict[str, Any]) -> Track:

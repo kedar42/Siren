@@ -47,7 +47,9 @@ export a Netscape `cookies.txt` from a logged-in browser, drop it at
 - [x] `/queue`, `/pause`, `/resume`
 - [x] Auto-leave when channel empty
 - [ ] Resolution cache in SQLite
-- [ ] `/nowplaying`, `/seek`, `/volume`
+- [x] `/nowplaying` 
+- [ ] `/seek` 
+- [ ] `/volume`
 - [ ] Persistent now-playing embed with buttons
 - [ ] Queue persistence across restart
 - [ ] Filters: bassboost, nightcore, slowed (ffmpeg `-af`)

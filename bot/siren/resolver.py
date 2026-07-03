@@ -179,7 +179,7 @@ class TrackResolver:
         best_score, best = scored[0]
         if best_score == float("-inf"):
             log.warning("[resolve] all candidates rejected by junk filter / duration")
-            return ResolveResult(message=f"Couldn't resolve `{original_query}`.")
+            return ResolveResult(message=f"Found **{anchor.title}** by *{anchor.author}* on Spotify, but couldn't find a matching YouTube video.")
 
         log.info("[resolve] picked: %s - %s (score=%.2f, url=%s)", best.author, best.title, best_score, best.webpage_url)
         best.isrc = anchor.isrc

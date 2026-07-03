@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -14,6 +15,7 @@ log = logging.getLogger("siren")
 
 MAX_YOUTUBE_PLAYLIST_TRACKS = 50
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
+YOUTUBE_ALBUM_BROWSE_ID_RE = re.compile(r"^MPRE[\w-]+$")
 
 
 class YouTubeTrackList(list[Track]):
@@ -30,7 +32,10 @@ def is_youtube_playlist_url(value: str) -> bool:
     host = parsed.netloc.lower().split(":", 1)[0]
     if host not in YOUTUBE_HOSTS:
         return False
-    return bool((parse_qs(parsed.query).get("list") or [""])[0])
+    if (parse_qs(parsed.query).get("list") or [""])[0]:
+        return True
+    path_parts = [part for part in parsed.path.split("/") if part]
+    return len(path_parts) >= 2 and path_parts[0] == "browse" and bool(YOUTUBE_ALBUM_BROWSE_ID_RE.match(path_parts[1]))
 
 
 def _with_default_scheme(value: str) -> str:

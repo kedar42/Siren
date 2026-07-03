@@ -151,6 +151,19 @@ class ResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(youtube.playlist_urls, ["music.youtube.com/playlist?list=abc"])
         self.assertEqual(youtube.resolved_urls, [])
 
+    async def test_youtube_album_browse_url_returns_multi_track_result(self) -> None:
+        tracks = [Track("First", "Artist", 100000, "first-url"), Track("Second", "Artist", 110000, "second-url")]
+        youtube = PlaylistYouTube(tracks)
+        resolver = TrackResolver(FakeSpotify(anchor=None), youtube)
+
+        result = await resolver.resolve("https://music.youtube.com/browse/MPREb_example123")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.all_tracks, tracks)
+        self.assertEqual(result.message, "Queued 2 tracks.")
+        self.assertEqual(youtube.playlist_urls, ["https://music.youtube.com/browse/MPREb_example123"])
+        self.assertEqual(youtube.resolved_urls, [])
+
     async def test_youtube_playlist_summary_reports_cap_and_skipped_entries(self) -> None:
         tracks = [Track(f"Track {index}", "Artist", 100000, f"url-{index}") for index in range(50)]
         resolver = TrackResolver(FakeSpotify(anchor=None), PlaylistYouTube(tracks, truncated=True, skipped=2))

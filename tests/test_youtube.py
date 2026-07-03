@@ -64,6 +64,16 @@ class YouTubeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(is_youtube_playlist_url("https://www.youtube.com/watch?v=abc123"))
         self.assertFalse(is_youtube_playlist_url("https://soundcloud.com/artist/playlist?list=abc"))
 
+    async def test_youtube_playlist_url_detection_accepts_album_browse_forms(self) -> None:
+        from siren.youtube import is_youtube_playlist_url
+
+        self.assertTrue(is_youtube_playlist_url("https://music.youtube.com/browse/MPREb_example123"))
+        self.assertTrue(is_youtube_playlist_url("music.youtube.com/browse/MPREb_example123"))
+        self.assertTrue(is_youtube_playlist_url("https://music.youtube.com/browse/MPREb_example123/"))
+        self.assertFalse(is_youtube_playlist_url("https://music.youtube.com/browse/UCabc123"))
+        self.assertFalse(is_youtube_playlist_url("https://music.youtube.com/browse/"))
+        self.assertFalse(is_youtube_playlist_url("https://soundcloud.com/browse/MPREb_example123"))
+
     async def test_tracks_from_playlist_url_converts_flat_entries_in_order(self) -> None:
         class PlaylistYoutubeDL(FakeYoutubeDL):
             targets: list[str] = []
@@ -97,6 +107,27 @@ class YouTubeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(FakeYoutubeDL.calls[-1]["noplaylist"])
         self.assertEqual(FakeYoutubeDL.calls[-1]["extract_flat"], "in_playlist")
         self.assertEqual(FakeYoutubeDL.calls[-1]["playlistend"], 51)
+
+    async def test_tracks_from_playlist_url_handles_album_browse_url(self) -> None:
+        class AlbumYoutubeDL(FakeYoutubeDL):
+            targets: list[str] = []
+
+            def extract_info(self, target: str, download: bool) -> dict[str, object]:
+                self.targets.append(target)
+                return {
+                    "entries": [
+                        {"title": "Track One", "uploader": "Artist", "duration": 100, "url": "track-one"},
+                        {"title": "Track Two", "uploader": "Artist", "duration": 110, "url": "track-two"},
+                    ]
+                }
+
+        service = YouTubeService(settings(), ydl_cls=AlbumYoutubeDL)
+
+        tracks = await service.tracks_from_playlist_url("https://music.youtube.com/browse/MPREb_example123")
+
+        self.assertEqual([track.title for track in tracks], ["Track One", "Track Two"])
+        self.assertEqual(AlbumYoutubeDL.targets, ["https://music.youtube.com/browse/MPREb_example123"])
+        self.assertFalse(tracks.truncated)
 
     async def test_tracks_from_playlist_url_skips_malformed_entries(self) -> None:
         class MalformedPlaylistYoutubeDL(FakeYoutubeDL):

@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from rapidfuzz import fuzz
 
 from .models import Track
-from .spotify import SpotifyService, UnsupportedSpotifyUrl
-from .youtube import YouTubeService
+from .spotify import MAX_PLAYLIST_TRACKS, SpotifyService, SpotifyUrlKind, UnsupportedSpotifyUrl
+from .youtube import MAX_YOUTUBE_PLAYLIST_TRACKS, YouTubeService, is_youtube_playlist_url
 
 log = logging.getLogger("siren")
 
@@ -18,16 +18,24 @@ JUNK_PATTERNS = re.compile(
     r"bass[- ]?boost(?:ed)?|reverb|karaoke|cover|instrumental)\b",
     re.IGNORECASE,
 )
+MAX_EXPANDED_RESOLVE_CONCURRENCY = 5
 
 
 @dataclass(frozen=True)
 class ResolveResult:
     track: Track | None = None
+    tracks: list[Track] | None = None
     message: str = ""
 
     @property
     def ok(self) -> bool:
-        return self.track is not None
+        return bool(self.all_tracks)
+
+    @property
+    def all_tracks(self) -> list[Track]:
+        if self.tracks is not None:
+            return self.tracks
+        return [self.track] if self.track is not None else []
 
 
 URL_LIKE_PREFIXES = (
@@ -81,14 +89,31 @@ class TrackResolver:
         spotify_url = self.spotify.parse_url(query)
         if spotify_url:
             try:
-                anchor = await asyncio.to_thread(self.spotify.track_from_url, query)
+                anchors = await asyncio.to_thread(self.spotify.tracks_from_url, query)
             except UnsupportedSpotifyUrl as exc:
                 return ResolveResult(message=str(exc))
-            if not anchor:
+            if not anchors:
                 log.warning("[resolve] spotify URL did not resolve: %s", query)
                 return ResolveResult(message=f"Couldn't resolve `{query}`.")
-            self._log_anchor(anchor)
-            return await self._resolve_anchored(anchor, query)
+            if len(anchors) == 1:
+                self._log_anchor(anchors[0])
+                return await self._resolve_anchored(anchors[0], query)
+            at_playlist_cap = spotify_url.kind is SpotifyUrlKind.PLAYLIST and bool(getattr(anchors, "truncated", False))
+            return await self._resolve_anchors(anchors, query, at_playlist_cap=at_playlist_cap)
+
+        if is_youtube_playlist_url(query):
+            log.info("[resolve] youtube playlist URL -> yt-dlp flat playlist")
+            tracks = await self.youtube.tracks_from_playlist_url(query)
+            if not tracks:
+                log.warning("[resolve] youtube playlist URL did not resolve: %s", query)
+                return ResolveResult(message=f"Couldn't resolve `{query}`.")
+            message = f"Queued {len(tracks)} {'track' if len(tracks) == 1 else 'tracks'}."
+            if getattr(tracks, "truncated", False):
+                message += f" Playlist limited to first {MAX_YOUTUBE_PLAYLIST_TRACKS} tracks."
+            skipped = int(getattr(tracks, "skipped", 0) or 0)
+            if skipped:
+                message += f" Skipped {skipped} {'track' if skipped == 1 else 'tracks'} that couldn't be resolved."
+            return ResolveResult(track=tracks[0], tracks=list(tracks), message=message)
 
         if is_url(query):
             log.info("[resolve] direct URL -> yt-dlp")
@@ -159,6 +184,34 @@ class TrackResolver:
         log.info("[resolve] picked: %s - %s (score=%.2f, url=%s)", best.author, best.title, best_score, best.webpage_url)
         best.isrc = anchor.isrc
         return ResolveResult(track=best)
+
+    async def _resolve_anchors(
+        self,
+        anchors: list[Track],
+        original_query: str,
+        *,
+        at_playlist_cap: bool = False,
+    ) -> ResolveResult:
+        semaphore = asyncio.Semaphore(MAX_EXPANDED_RESOLVE_CONCURRENCY)
+
+        async def resolve_one(anchor: Track) -> ResolveResult:
+            self._log_anchor(anchor)
+            async with semaphore:
+                return await self._resolve_anchored(anchor, original_query)
+
+        results = await asyncio.gather(*(resolve_one(anchor) for anchor in anchors))
+        tracks = [result.track for result in results if result.track is not None]
+
+        skipped = len(anchors) - len(tracks)
+        if not tracks:
+            return ResolveResult(message=f"Couldn't resolve any tracks from `{original_query}`.")
+
+        message = f"Queued {len(tracks)} {'track' if len(tracks) == 1 else 'tracks'}."
+        if at_playlist_cap:
+            message += f" Playlist limited to first {MAX_PLAYLIST_TRACKS} tracks."
+        if skipped:
+            message += f" Skipped {skipped} {'track' if skipped == 1 else 'tracks'} that couldn't be resolved."
+        return ResolveResult(track=tracks[0], tracks=tracks, message=message)
 
     @staticmethod
     def _log_anchor(anchor: Track) -> None:
